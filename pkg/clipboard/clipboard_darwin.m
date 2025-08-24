@@ -11,6 +11,8 @@
 
 #import <Foundation/Foundation.h>
 #import <Cocoa/Cocoa.h>
+#import <stdlib.h>
+#import <string.h>
 
 unsigned int clipboard_read_string(void **out) {
 	NSPasteboard * pasteboard = [NSPasteboard generalPasteboard];
@@ -68,64 +70,77 @@ unsigned int clipboard_read_image(void **out) {
 // 	Ok(res)
 // }
 unsigned int clipboard_get_files(void **out) {
-	*out = NULL;
-	NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-	// NSArray *files = [pasteboard propertyListForType:NSFilenamesPboardType];
-	// id pbData = [pasteboard propertyListForType:NSPasteboardTypeFileURL];
-	id pbData = [pasteboard propertyListForType:NSFilenamesPboardType];
-	// 检查数据有效性：必须是 NSArray 类型且非空
-	if (!pbData || ![pbData isKindOfClass:[NSArray class]]) {
-		return 1; // 错误：无数据或数据类型错误
-	}
-	NSArray *filePaths = (NSArray *)pbData;
-	if (filePaths.count == 0) {
-		return 2; // 错误：剪贴板中无文件
-	}
-	// 分配 C 字符串数组内存（+1 用于结尾的 NULL 标记）
-	char **result = (char **)malloc((filePaths.count + 1) * sizeof(char *));
-	if (!result) {
-		return 3; // 错误：内存分配失败
-	}
-	// 遍历 NSArray 转换每个路径为 C 字符串
-	for (NSUInteger i = 0; i < filePaths.count; i++) {
-		id item = filePaths[i];
-		// 检查数组元素是否为 NSString 类型
-		if (![item isKindOfClass:[NSString class]]) {
-			// 清理已分配的内存
-			for (NSUInteger j = 0; j < i; j++) {
-				free(result[j]);
-			}
-			free(result);
-			return 4; // 错误：数组包含非字符串元素
-		}
+    *out = NULL; // 初始化输出为 NULL，避免野指针
 
-		// 转换 NSString 为 C 字符串并复制（避免原对象释放后失效）
-		NSString *path = (NSString *)item;
-		const char *cPath = [path UTF8String];
-		if (!cPath) { // 理论上 NSString 的 UTF8String 不会为 NULL，但防御性检查
-			for (NSUInteger j = 0; j < i; j++) {
-				free(result[j]);
-			}
-			free(result);
-			return 5; // 错误：字符串无法转换为 C 格式
-		}
+    // 获取系统剪贴板
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    
+    // 读取剪贴板中所有 NSURL 类型的对象（对应文件 URL）
+    NSArray *urlObjects = [pasteboard readObjectsForClasses:@[[NSURL class]] 
+                                                    options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (!urlObjects || urlObjects.count == 0) {
+        return 2; // 错误：剪贴板中无文件 URL
+    }
 
-		// 复制字符串到新分配的内存（需手动释放）
-		result[i] = strdup(cPath);
-		if (!result[i]) { // strdup 可能因内存不足失败
-			for (NSUInteger j = 0; j < i; j++) {
-				free(result[j]);
-			}
-			free(result);
-			return 6; // 错误：内存分配失败
-		}
-	}
+    NSMutableArray<NSString *> *filePaths = [NSMutableArray array];
 
-	// 添加 NULL 结尾标记（方便遍历）
-	result[filePaths.count] = NULL;
-	*out = result;
+    // 遍历 URL 对象，提取本地文件路径
+    for (id obj in urlObjects) {
+        if (![obj isKindOfClass:[NSURL class]]) {
+            continue; // 跳过非 NSURL 对象
+        }
 
-	return 0; // 成功
+        NSURL *url = (NSURL *)obj;
+        if (![url isFileURL]) {
+            continue; // 仅处理本地文件 URL
+        }
+
+        // 将 URL 转换为文件路径（如 "/path/to/file"）
+        NSString *path = [url path];
+        if (path && path.length > 0) {
+            [filePaths addObject:path];
+        }
+    }
+
+    // 检查是否有有效文件路径
+    if (filePaths.count == 0) {
+        return 2; // 错误：剪贴板中无文件
+    }
+
+    // 分配 C 字符串数组内存（+1 用于结尾的 NULL 标记）
+    char **result = (char **)malloc((filePaths.count + 1) * sizeof(char *));
+    if (!result) {
+        return 3; // 错误：内存分配失败
+    }
+
+    // 遍历 NSMutableArray 转换每个路径为 C 字符串
+    for (NSUInteger i = 0; i < filePaths.count; i++) {
+        NSString *path = filePaths[i];
+        const char *cPath = [path UTF8String];
+        if (!cPath) { // 防御性检查（NSString 的 UTF8String 通常非空）
+            for (NSUInteger j = 0; j < i; j++) {
+                free(result[j]);
+            }
+            free(result);
+            return 5; // 错误：字符串无法转换为 C 格式
+        }
+
+        // 复制字符串到新分配的内存（需手动释放）
+        result[i] = strdup(cPath);
+        if (!result[i]) { // strdup 可能因内存不足失败
+            for (NSUInteger j = 0; j < i; j++) {
+                free(result[j]);
+            }
+            free(result);
+            return 6; // 错误：内存分配失败
+        }
+    }
+
+    // 添加 NULL 结尾标记（方便遍历）
+    result[filePaths.count] = NULL;
+    *out = result;
+
+    return 0; // 成功
 }
 
 int clipboard_write_string(const void *bytes, NSInteger n) {
