@@ -80,6 +80,7 @@ const (
 	FmtText Format = iota
 	// FmtImage indicates image/png clipboard format
 	FmtImage
+	FmtFilepath
 )
 
 var (
@@ -117,20 +118,6 @@ func Read(t Format) []byte {
 	defer lock.Unlock()
 
 	buf, err := read(t)
-	if err != nil {
-		if debug {
-			fmt.Fprintf(os.Stderr, "read clipboard err: %v\n", err)
-		}
-		return nil
-	}
-	return buf
-}
-
-func Files() []string {
-	lock.Lock()
-	defer lock.Unlock()
-
-	buf, err := get_files()
 	if err != nil {
 		if debug {
 			fmt.Fprintf(os.Stderr, "read clipboard err: %v\n", err)

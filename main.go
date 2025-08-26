@@ -13,7 +13,27 @@ import (
 	"clipboard_t/pkg/clipboard"
 )
 
-func readClipboard1() {
+func readTextFromClipboard() {
+	fmt.Println("正在读取剪贴板文本...")
+
+	// 初始化剪贴板
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 读取剪贴板中的图片
+	text := clipboard.Read(clipboard.FmtText)
+	if text == nil {
+		fmt.Println("剪贴板中没有文本数据")
+		os.Exit(1)
+	}
+
+	fmt.Printf("文本是: %s\n", text)
+}
+
+func readImageFromClipboard() {
 	fmt.Println("正在读取剪贴板图片...")
 
 	// 初始化剪贴板
@@ -65,6 +85,31 @@ func readClipboard1() {
 	fmt.Printf("图片已成功保存到: %s\n", absPath)
 }
 
+
+func readFilepathsFromClipboard() {
+	fmt.Println("正在读取剪贴板文件列表...")
+
+	// 初始化剪贴板
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 读取剪贴板中的图片
+	files := clipboard.Read(clipboard.FmtFilepath)
+	if files == nil {
+		fmt.Println("剪贴板中没有文件数据")
+		os.Exit(1)
+	}
+
+	fmt.Printf("粘贴板中的文件列表: %s\n", files)
+}
+
+func readClipboard1() {
+	
+}
+
 func extractFilePaths(input string) []string {
 	var paths []string
 	// 假设文件路径是以换行符或空格分隔的
@@ -81,12 +126,6 @@ func extractFilePaths(input string) []string {
 }
 
 func main() {
-	// readClipboard1()
-	err := clipboard.Init()
-	if err != nil {
-		fmt.Printf("初始化剪贴板失败: %v\n", err)
-		os.Exit(1)
-	}
-	files := clipboard.Files()
-	fmt.Println("files is", files)
+	readFilepathsFromClipboard()
+	// readTextFromClipboard()
 }

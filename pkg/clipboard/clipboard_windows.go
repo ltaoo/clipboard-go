@@ -21,6 +21,7 @@ import (
 	"image/color"
 	"image/png"
 	"reflect"
+	"strings"
 	"runtime"
 	"syscall"
 	"time"
@@ -49,8 +50,7 @@ func readText() (buf []byte, err error) {
 	// Find NUL terminator
 	n := 0
 	for ptr := unsafe.Pointer(p); *(*uint16)(ptr) != 0; n++ {
-		ptr = unsafe.Pointer(uintptr(ptr) +
-			unsafe.Sizeof(*((*uint16)(unsafe.Pointer(p)))))
+		ptr = unsafe.Pointer(uintptr(ptr) + unsafe.Sizeof(*((*uint16)(unsafe.Pointer(p)))))
 	}
 
 	var s []uint16
@@ -295,6 +295,155 @@ func writeImage(buf []byte) error {
 	return nil
 }
 
+// https://stackoverflow.com/questions/77205618/when-a-file-is-on-the-windows-clipboard-how-can-i-in-python-access-its-path
+func readRaw() ([]byte, error) {
+    hMem, _, err := getClipboardData.Call(cFmtFilepaths)
+    if hMem == 0 {
+        return nil, err
+    }
+    defer gUnlock.Call(hMem)
+
+    p, _, err := gLock.Call(hMem)
+    if p == 0 {
+        return nil, err
+    }
+    defer gUnlock.Call(hMem)
+
+    size, _, err := gSize.Call(hMem)
+    if size == 0 {
+        return nil, err
+    }
+
+    data := make([]byte, size)
+    fmt.Println("size", size)
+//     syscall.Memmove(unsafe.Pointer(&data[0]), unsafe.Pointer(p), uintptr(size))
+
+    return data, nil
+}
+
+func readFilepaths() ([]byte, error) {
+	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
+	if hMem == 0 {
+		return nil, err
+	}
+	p, _, err := gLock.Call(hMem)
+	if p == 0 {
+		return nil, err
+	}
+	defer gUnlock.Call(hMem)
+
+	// rawData, err := readRaw()
+	// if err!= nil {
+	// 	return nil, err
+	// }
+	// fmt.Println("raw data", rawData)
+
+	// 验证HDROP结构的内存布局
+	type HDROPHeader struct {
+		pFiles uint32
+		x      int16
+		y      int16
+		fNC    uint32
+		fWide  uint32
+	}
+
+	// hdropHeader := (*HDROPHeader)(unsafe.Pointer(p))
+	// fmt.Printf("HDROP header - pFiles: %d, x: %d, y: %d\n", hdropHeader.pFiles, hdropHeader.x, hdropHeader.y)
+
+	// 解析HDROP头
+	// hdropHeader := (*HDROPHeader)(unsafe.Pointer(p))
+	// fmt.Printf("pFiles: %d, x: %d, y: %d, fNC: %d, fWide: %d\n", hdropHeader.pFiles, hdropHeader.x, hdropHeader.y, hdropHeader.fNC, hdropHeader.fWide)
+	 // 获取文件数量
+	var count uint32
+	ret, _, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	if ret == 0 {
+		return nil, fmt.Errorf("DragQueryFile (to get count) failed: %w", err)
+	}
+
+	fmt.Println("num files", count)
+
+	// 计算文件路径数据的起始位置
+	// filePathsStart := uintptr(unsafe.Sizeof(HDROPHeader{}))
+	// filePathsPtr := unsafe.Pointer(uintptr(p) + filePathsStart)
+
+	// var filePaths []string
+	// if hdropHeader.fWide != 0 {
+	// 	// UTF - 16编码处理
+	// 	var s []uint16
+	// 	h := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	// 	h.Data = uintptr(filePathsPtr)
+	// 	// 这里假设文件路径数据以0结尾，需要根据实际情况调整
+	// 	for {
+	// 	if *(*uint16)(unsafe.Pointer(h.Data)) == 0 {
+	// 		break
+	// 	}
+	// 	h.Len++
+	// 	h.Cap++
+	// 	h.Data += unsafe.Sizeof(uint16(0))
+	// 	}
+	// 	str := syscall.UTF16ToString(s)
+	// 	filePaths = strings.Split(str, "\x00")
+	// } else {
+	// 	// 假设为MBCS编码，这里简单处理，实际可能更复杂
+	// 	// 以0结尾的字节数组处理
+	// 	var data []byte
+	// 	h := (*reflect.SliceHeader)(unsafe.Pointer(&data))
+	// 	h.Data = uintptr(filePathsPtr)
+	// 	// 这里假设文件路径数据以0结尾，需要根据实际情况调整
+	// 	for {
+	// 		if *(*byte)(unsafe.Pointer(h.Data)) == 0 {
+	// 			break
+	// 		}
+	// 		h.Len++
+	// 		h.Cap++
+	// 		h.Data += unsafe.Sizeof(byte(0))
+	// 	}
+	// 	str := string(data)
+	// 	filePaths = strings.Split(str, "\x00")
+	// }
+
+	// // 过滤空字符串
+	// result := make([]string, 0, len(filePaths))
+	// for _, path := range filePaths {
+	// 	if path!= "" {
+	// 		result = append(result, path)
+	// 	}
+	// }
+	// joinedPaths := strings.Join(result, "\n")
+
+	// return []byte(joinedPaths), nil
+	// return result, nil
+
+
+	//  // 获取文件数量
+	// var count uint32
+	// // dragQueryFile.Call(uintptr(p), ^uint32(0), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	//   // 将^uint32(0)转换为uintptr
+	// ret, _, err := dragQueryFile.Call(uintptr(p), uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	// ret, _, err := dragQueryFile.Call(uintptr(p), uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	// if ret == 0 {
+	// 	fmt.Println("err0")
+	// }
+	// fmt.Println("file count is", count, ret)
+
+	// // 存储文件路径
+	filePaths := make([]string, count)
+	for i := uint32(0); i < count; i++ {
+		var length uint32
+		// dragQueryFile.Call(uintptr(p), i, 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		dragQueryFile.Call(uintptr(p), uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+
+		buffer := make([]uint16, length+1)
+		// dragQueryFile.Call(uintptr(p), i, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		dragQueryFile.Call(uintptr(p), uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+
+		filePaths = append(filePaths, syscall.UTF16ToString(buffer))
+	}
+	// return []byte(string(utf16.Decode(filePaths))), nil
+	joinedPaths := strings.Join(filePaths, "\n")
+	return []byte(joinedPaths), nil
+}
+
 func read(t Format) (buf []byte, err error) {
 	// On Windows, OpenClipboard and CloseClipboard must be executed on
 	// the same thread. Thus, lock the OS thread for further execution.
@@ -305,6 +454,8 @@ func read(t Format) (buf []byte, err error) {
 	switch t {
 	case FmtImage:
 		format = cFmtDIBV5
+	case FmtFilepath:
+		format = cFmtFilepaths
 	case FmtText:
 		fallthrough
 	default:
@@ -313,6 +464,7 @@ func read(t Format) (buf []byte, err error) {
 
 	// check if clipboard is avaliable for the requested format
 	r, _, err := isClipboardFormatAvailable.Call(format)
+	fmt.Println("after check clipboard ", r, format)
 	if r == 0 {
 		return nil, errUnavailable
 	}
@@ -330,6 +482,8 @@ func read(t Format) (buf []byte, err error) {
 	switch format {
 	case cFmtDIBV5:
 		return readImage()
+	case cFmtFilepaths:
+		return readFilepaths()
 	case cFmtUnicodeText:
 		fallthrough
 	default:
@@ -431,6 +585,7 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 const (
 	cFmtBitmap      = 2 // Win+PrintScreen
 	cFmtUnicodeText = 13
+	cFmtFilepaths   = 15
 	cFmtDIBV5       = 17
 	// Screenshot taken from special shortcut is in different format (why??), see:
 	// https://jpsoft.com/forums/threads/detecting-clipboard-format.5225/
@@ -530,12 +685,16 @@ var (
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
 	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
 
+	shell32 = syscall.NewLazyDLL("shell32")
+	dragQueryFile  = shell32.NewProc("DragQueryFileW")
+
 	kernel32 = syscall.NewLazyDLL("kernel32")
 
 	// Locks a global memory object and returns a pointer to the first
 	// byte of the object's memory block.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globallock
 	gLock = kernel32.NewProc("GlobalLock")
+	gSize = kernel32.NewProc("GlobalSize")
 	// Decrements the lock count associated with a memory object that was
 	// allocated with GMEM_MOVEABLE. This function has no effect on memory
 	// objects allocated with GMEM_FIXED.
