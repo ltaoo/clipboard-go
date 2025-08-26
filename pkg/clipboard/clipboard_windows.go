@@ -296,30 +296,6 @@ func writeImage(buf []byte) error {
 }
 
 // https://stackoverflow.com/questions/77205618/when-a-file-is-on-the-windows-clipboard-how-can-i-in-python-access-its-path
-func readRaw() ([]byte, error) {
-    hMem, _, err := getClipboardData.Call(cFmtFilepaths)
-    if hMem == 0 {
-        return nil, err
-    }
-    defer gUnlock.Call(hMem)
-
-    p, _, err := gLock.Call(hMem)
-    if p == 0 {
-        return nil, err
-    }
-    defer gUnlock.Call(hMem)
-
-    size, _, err := gSize.Call(hMem)
-    if size == 0 {
-        return nil, err
-    }
-
-    data := make([]byte, size)
-    fmt.Println("size", size)
-//     syscall.Memmove(unsafe.Pointer(&data[0]), unsafe.Pointer(p), uintptr(size))
-
-    return data, nil
-}
 
 func readFilepaths() ([]byte, error) {
 	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
@@ -332,11 +308,6 @@ func readFilepaths() ([]byte, error) {
 	}
 	defer gUnlock.Call(hMem)
 
-	// rawData, err := readRaw()
-	// if err!= nil {
-	// 	return nil, err
-	// }
-	// fmt.Println("raw data", rawData)
 
 	// 验证HDROP结构的内存布局
 	type HDROPHeader struct {
@@ -347,97 +318,62 @@ func readFilepaths() ([]byte, error) {
 		fWide  uint32
 	}
 
-	// hdropHeader := (*HDROPHeader)(unsafe.Pointer(p))
-	// fmt.Printf("HDROP header - pFiles: %d, x: %d, y: %d\n", hdropHeader.pFiles, hdropHeader.x, hdropHeader.y)
-
-	// 解析HDROP头
-	// hdropHeader := (*HDROPHeader)(unsafe.Pointer(p))
-	// fmt.Printf("pFiles: %d, x: %d, y: %d, fNC: %d, fWide: %d\n", hdropHeader.pFiles, hdropHeader.x, hdropHeader.y, hdropHeader.fNC, hdropHeader.fWide)
-	 // 获取文件数量
 	var count uint32
-	ret, _, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	ret, v, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
 	if ret == 0 {
 		return nil, fmt.Errorf("DragQueryFile (to get count) failed: %w", err)
 	}
 
-	fmt.Println("num files", count)
-
-	// 计算文件路径数据的起始位置
-	// filePathsStart := uintptr(unsafe.Sizeof(HDROPHeader{}))
-	// filePathsPtr := unsafe.Pointer(uintptr(p) + filePathsStart)
-
-	// var filePaths []string
-	// if hdropHeader.fWide != 0 {
-	// 	// UTF - 16编码处理
-	// 	var s []uint16
-	// 	h := (*reflect.SliceHeader)(unsafe.Pointer(&s))
-	// 	h.Data = uintptr(filePathsPtr)
-	// 	// 这里假设文件路径数据以0结尾，需要根据实际情况调整
-	// 	for {
-	// 	if *(*uint16)(unsafe.Pointer(h.Data)) == 0 {
-	// 		break
-	// 	}
-	// 	h.Len++
-	// 	h.Cap++
-	// 	h.Data += unsafe.Sizeof(uint16(0))
-	// 	}
-	// 	str := syscall.UTF16ToString(s)
-	// 	filePaths = strings.Split(str, "\x00")
-	// } else {
-	// 	// 假设为MBCS编码，这里简单处理，实际可能更复杂
-	// 	// 以0结尾的字节数组处理
-	// 	var data []byte
-	// 	h := (*reflect.SliceHeader)(unsafe.Pointer(&data))
-	// 	h.Data = uintptr(filePathsPtr)
-	// 	// 这里假设文件路径数据以0结尾，需要根据实际情况调整
-	// 	for {
-	// 		if *(*byte)(unsafe.Pointer(h.Data)) == 0 {
-	// 			break
-	// 		}
-	// 		h.Len++
-	// 		h.Cap++
-	// 		h.Data += unsafe.Sizeof(byte(0))
-	// 	}
-	// 	str := string(data)
-	// 	filePaths = strings.Split(str, "\x00")
-	// }
-
-	// // 过滤空字符串
-	// result := make([]string, 0, len(filePaths))
-	// for _, path := range filePaths {
-	// 	if path!= "" {
-	// 		result = append(result, path)
-	// 	}
-	// }
-	// joinedPaths := strings.Join(result, "\n")
-
-	// return []byte(joinedPaths), nil
-	// return result, nil
-
-
-	//  // 获取文件数量
-	// var count uint32
-	// // dragQueryFile.Call(uintptr(p), ^uint32(0), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
-	//   // 将^uint32(0)转换为uintptr
-	// ret, _, err := dragQueryFile.Call(uintptr(p), uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
-	// ret, _, err := dragQueryFile.Call(uintptr(p), uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
-	// if ret == 0 {
-	// 	fmt.Println("err0")
-	// }
-	// fmt.Println("file count is", count, ret)
+	fmt.Println("num files", ret, v, err)
+	// count = uint32(ret)
+	fileCount := uint32(ret)
 
 	// // 存储文件路径
-	filePaths := make([]string, count)
-	for i := uint32(0); i < count; i++ {
+	filePaths := make([]string, fileCount)
+	for i := uint32(0); i < fileCount; i++ {
+		// var length uint32
+		// // dragQueryFile.Call(uintptr(p), i, 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		// dragQueryFile.Call(uintptr(p), uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+
+		// buffer := make([]uint16, length+1)
+		// // dragQueryFile.Call(uintptr(p), i, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		// dragQueryFile.Call(uintptr(p), uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+
+		// filePaths = append(filePaths, syscall.UTF16ToString(buffer))
+
+
+		// var length uint32
+		// ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		// fmt.Println("find the 1", ret, err)
+		// if ret == 0 {
+		// 	return nil, fmt.Errorf("DragQueryFile (to get length) for file %d failed: %w", i, err)
+		// }
+
+		// buffer := make([]uint16, length+1)
+		// ret, _, err = dragQueryFile.Call(p, uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		// fmt.Println("find the 2", ret, err)
+		// if ret == 0 {
+		// 	return nil, fmt.Errorf("DragQueryFile (to get path) for file %d failed: %w", i, err)
+		// }
+
+		// filePaths = append(filePaths, syscall.UTF16ToString(buffer))
+
+
+		 // 获取文件路径所需长度（不包含 null 终止符）
 		var length uint32
-		// dragQueryFile.Call(uintptr(p), i, 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		dragQueryFile.Call(uintptr(p), uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		if ret == 0 {
+			return nil, fmt.Errorf("DragQueryFile (to get length) for file %d failed: %w", i, err)
+		}
+		length = uint32(ret)
 
 		buffer := make([]uint16, length+1)
-		// dragQueryFile.Call(uintptr(p), i, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		dragQueryFile.Call(uintptr(p), uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		ret, _, err = dragQueryFile.Call(p, uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2))
+		if ret == 0 {
+			return nil, fmt.Errorf("DragQueryFile (to get path) for file %d failed: %w", i, err)
+		}
 
-		filePaths = append(filePaths, syscall.UTF16ToString(buffer))
+		filePaths = append(filePaths, syscall.UTF16ToString(buffer[:length]))
 	}
 	// return []byte(string(utf16.Decode(filePaths))), nil
 	joinedPaths := strings.Join(filePaths, "\n")
