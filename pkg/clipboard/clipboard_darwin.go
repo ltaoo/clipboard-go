@@ -1,91 +1,112 @@
-// Copyright 2021 The golang.design Initiative Authors.
-// All rights reserved. Use of this source code is governed
-// by a MIT license that can be found in the LICENSE file.
-//
-// Written by Changkun Ou <changkun.de>
-
 //go:build darwin && !ios
 
 package clipboard
 
-/*
-#cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Foundation -framework Cocoa
-#import <Foundation/Foundation.h>
-#import <Cocoa/Cocoa.h>
-
-unsigned int clipboard_read_string(void **out);
-unsigned int clipboard_read_image(void **out);
-unsigned int clipboard_get_files(void **out);
-int clipboard_write_string(const void *bytes, NSInteger n);
-int clipboard_write_image(const void *bytes, NSInteger n);
-NSInteger clipboard_change_count();
-*/
-import "C"
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 	"time"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
+	"github.com/ebitengine/purego/objc"
 )
+
+var (
+	appkit = must(purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_GLOBAL|purego.RTLD_NOW))
+
+	_NSPasteboardTypeString = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
+	_NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
+	_NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
+
+	class_NSPasteboard = objc.GetClass("NSPasteboard")
+	class_NSData       = objc.GetClass("NSData")
+	class_NSArray      = objc.GetClass("NSArray")
+	class_NSString     = objc.GetClass("NSString")
+	class_NSURL        = objc.GetClass("NSURL")
+
+	sel_generalPasteboard        = objc.RegisterName("generalPasteboard")
+	sel_length                   = objc.RegisterName("length")
+	sel_getBytesLength           = objc.RegisterName("getBytes:length:")
+	sel_dataForType              = objc.RegisterName("dataForType:")
+	sel_propertyListForType      = objc.RegisterName("propertyListForType:")
+	sel_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
+	sel_clearContents            = objc.RegisterName("clearContents")
+	sel_setDataForType           = objc.RegisterName("setData:forType:")
+	sel_dataWithBytesLength      = objc.RegisterName("dataWithBytes:length:")
+	sel_changeCount              = objc.RegisterName("changeCount")
+	sel_count                    = objc.RegisterName("count")
+	sel_UTF8String               = objc.RegisterName("UTF8String")
+	sel_objectAtIndex            = objc.RegisterName("objectAtIndex:")
+	sel_stringWithUTF8String     = objc.RegisterName("stringWithUTF8String:")
+	sel_arrayWithObjects_count   = objc.RegisterName("arrayWithObjects:count:")
+)
+
+func must(sym uintptr, err error) uintptr {
+	if err != nil {
+		panic(err)
+	}
+	return sym
+}
+
+func must2(sym uintptr, err error) uintptr {
+	if err != nil {
+		panic(err)
+	}
+	// dlsym returns a pointer to the object so dereference like this to avoid possible misuse of 'unsafe.Pointer' warning
+	return **(**uintptr)(unsafe.Pointer(&sym))
+}
 
 func initialize() error { return nil }
 
 func read(t Format) (buf []byte, err error) {
-	var (
-		data unsafe.Pointer
-		n    C.uint
-	)
 	switch t {
 	case FmtText:
-		n = C.clipboard_read_string(&data)
+		return clipboard_read_string(), nil
 	case FmtImage:
-		n = C.clipboard_read_image(&data)
+		return clipboard_read_image(), nil
+	case FmtFilepath:
+		return clipboard_read_files(), nil
 	}
-	if data == nil {
-		return nil, errUnavailable
-	}
-	defer C.free(unsafe.Pointer(data))
-	if n == 0 {
-		return nil, nil
-	}
-	return C.GoBytes(data, C.int(n)), nil
+	return nil, errUnavailable
 }
 
-// write writes the given data to clipboard and
-// returns true if success or false if failed.
 func write(t Format, buf []byte) (<-chan struct{}, error) {
-	var ok C.int
+	var ok bool
 	switch t {
 	case FmtText:
 		if len(buf) == 0 {
-			ok = C.clipboard_write_string(unsafe.Pointer(nil), 0)
+			ok = clipboard_write_string(nil)
 		} else {
-			ok = C.clipboard_write_string(unsafe.Pointer(&buf[0]),
-				C.NSInteger(len(buf)))
+			ok = clipboard_write_string(buf)
+
 		}
 	case FmtImage:
 		if len(buf) == 0 {
-			ok = C.clipboard_write_image(unsafe.Pointer(nil), 0)
+			ok = clipboard_write_image(nil)
 		} else {
-			ok = C.clipboard_write_image(unsafe.Pointer(&buf[0]),
-				C.NSInteger(len(buf)))
+			ok = clipboard_write_image(buf)
+		}
+	case FmtFilepath:
+		if len(buf) == 0 {
+			ok = clipboard_write_files(nil)
+		} else {
+			ok = clipboard_write_files(buf)
 		}
 	default:
 		return nil, errUnsupported
 	}
-	if ok != 0 {
+	if !ok {
 		return nil, errUnavailable
 	}
-
-	// use unbuffered data to prevent goroutine leak
 	changed := make(chan struct{}, 1)
-	cnt := C.long(C.clipboard_change_count())
+	cnt := clipboard_change_count()
 	go func() {
 		for {
 			// not sure if we are too slow or the user too fast :)
 			time.Sleep(time.Second)
-			cur := C.long(C.clipboard_change_count())
+			cur := clipboard_change_count()
 			if cnt != cur {
 				changed <- struct{}{}
 				close(changed)
@@ -96,92 +117,10 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	return changed, nil
 }
 
-var (
-	errNoFiles       = errors.New("no files in clipboard")
-	errInvalidData   = errors.New("invalid data type in clipboard")
-	errMemoryAlloc   = errors.New("memory allocation failed")
-	errElementType   = errors.New("clipboard contains non-string elements")
-	errStringConvert = errors.New("failed to convert string to C format")
-	errUnknown       = errors.New("unknown error")
-)
-
-func get_files() ([]string, error) {
-	// var (
-	// 	data unsafe.Pointer
-	// 	n    C.uint
-	// )
-	// n = C.clipboard_get_files(&data)
-	// if data == nil {
-	// 	return nil, errUnavailable
-	// }
-	// defer C.free(unsafe.Pointer(data))
-	// if n == 0 {
-	// 	return nil, nil
-	// }
-	// return C.GoBytes(data, C.int(n)), nil
-	// var cFiles **C.char // 对应 C 的 char**（指向字符串数组的指针）
-	var outPtr unsafe.Pointer
-	var errCode C.uint
-	var (
-		data unsafe.Pointer
-	)
-
-	// 调用 C 函数获取文件路径数组（错误码保存在 errCode）
-	// errCode = C.clipboard_get_files(&data)
-	errCode = C.clipboard_get_files(&outPtr)
-
-	// 处理 C 函数返回的错误码
-	switch errCode {
-	case 0: // 成功
-		// 无需处理，继续后续逻辑
-	case 1:
-		return nil, errInvalidData
-	case 2:
-		return nil, errNoFiles
-	case 3, 6:
-		return nil, errMemoryAlloc
-	case 4:
-		return nil, errElementType
-	case 5:
-		return nil, errStringConvert
-	default:
-		return nil, errUnknown
-	}
-	defer C.free(unsafe.Pointer(data))
-
-	cFiles := (**C.char)(outPtr)
-	// 遍历 C 的字符串数组（以 NULL 结尾）
-	var files []string
-	for i := 0; ; i++ {
-		// 通过指针运算获取第 i 个字符串的指针
-		cStr := *(**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cFiles)) + uintptr(i)*unsafe.Sizeof(cFiles)))
-		if cStr == nil { // 遇到 NULL 结尾标记，停止遍历
-			break
-		}
-		// 将 C 字符串转换为 Go 字符串
-		files = append(files, C.GoString(cStr))
-	}
-
-	// 手动释放 C 分配的内存（关键！避免内存泄漏）
-	// 1. 先释放每个字符串的内存
-	for i := 0; ; i++ {
-		cStr := *(**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cFiles)) + uintptr(i)*unsafe.Sizeof(cFiles)))
-		if cStr == nil {
-			break
-		}
-		C.free(unsafe.Pointer(cStr)) // 释放单个字符串
-	}
-	// 2. 最后释放整个数组的内存
-	C.free(unsafe.Pointer(cFiles))
-
-	return files, nil
-}
-
 func watch(ctx context.Context, t Format) <-chan []byte {
 	recv := make(chan []byte, 1)
-	// not sure if we are too slow or the user too fast :)
 	ti := time.NewTicker(time.Second)
-	lastCount := C.long(C.clipboard_change_count())
+	lastCount := clipboard_change_count()
 	go func() {
 		for {
 			select {
@@ -189,7 +128,7 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 				close(recv)
 				return
 			case <-ti.C:
-				this := C.long(C.clipboard_change_count())
+				this := clipboard_change_count()
 				if lastCount != this {
 					b := Read(t)
 					if b == nil {
@@ -202,4 +141,128 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 		}
 	}()
 	return recv
+}
+
+func clipboard_read_string() []byte {
+	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	var data = pasteboard.Send(sel_dataForType, _NSPasteboardTypeString)
+	if data == 0 {
+		return nil
+	}
+	var size = uint(data.Send(sel_length))
+	if size == 0 {
+		return nil
+	}
+	out := make([]byte, size)
+	data.Send(sel_getBytesLength, unsafe.SliceData(out), size)
+	return out
+}
+
+func clipboard_read_image() []byte {
+	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	data := pasteboard.Send(sel_dataForType, _NSPasteboardTypePNG)
+	if data == 0 {
+		return nil
+	}
+	size := data.Send(sel_length)
+	out := make([]byte, size)
+	data.Send(sel_getBytesLength, unsafe.SliceData(out), size)
+	return out
+}
+
+func readUTF8String(ptr unsafe.Pointer) string {
+	if ptr == nil {
+		return ""
+	}
+	var length int
+	for ; *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(length))) != 0; length++ {
+	}
+	bytes := make([]byte, length)
+	for i := 0; i < length; i++ {
+		bytes[i] = *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(i)))
+	}
+	return string(bytes)
+}
+
+func clipboard_read_files() []byte {
+	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	data := pasteboard.Send(sel_propertyListForType, _NSPasteboardTypeFiles)
+	if data == 0 {
+		return nil
+	}
+	array := objc.ID(data)
+	countResult := array.Send(sel_count)
+	count := int(countResult)
+	var strs []string
+	for i := 0; i < count; i++ {
+		fileObj := array.Send(sel_objectAtIndex, int(i))
+		utf8Ptr := unsafe.Pointer(fileObj.Send(sel_UTF8String))
+		if utf8Ptr == nil {
+			continue
+		}
+		fileStr := readUTF8String(utf8Ptr)
+		strs = append(strs, fileStr)
+	}
+
+	// 将字符串切片转换为字节切片
+	var totalLen int
+	for _, str := range strs {
+		totalLen += len(str)
+	}
+	result := make([]byte, totalLen)
+	offset := 0
+	for _, str := range strs {
+		strBytes := []byte(str)
+		copy(result[offset:], strBytes)
+		offset += len(strBytes)
+	}
+	return result
+}
+
+func clipboard_write_image(bytes []byte) bool {
+	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	data := objc.ID(class_NSData).Send(sel_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
+	pasteboard.Send(sel_clearContents)
+	return pasteboard.Send(sel_setDataForType, data, _NSPasteboardTypePNG) != 0
+}
+
+func clipboard_write_string(bytes []byte) bool {
+	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	data := objc.ID(class_NSData).Send(sel_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
+	pasteboard.Send(sel_clearContents)
+	return pasteboard.Send(sel_setDataForType, data, _NSPasteboardTypeString) != 0
+}
+func byte_slice_to_string_slice(b []byte) ([]string, error) {
+	var strs []string
+	err := json.Unmarshal(b, &strs)
+	return strs, err
+}
+func constStringPtr(s string) *int8 {
+	return (*int8)(unsafe.Pointer(&[]byte(s + "\x00")[0]))
+}
+func clipboard_write_files(bytes []byte) bool {
+	files, err := byte_slice_to_string_slice(bytes)
+	if err != nil {
+		return false
+	}
+	var filePathsPtrs []unsafe.Pointer
+	for _, path := range files {
+		fmt.Println(path)
+		nsString := objc.ID(class_NSString).Send(sel_stringWithUTF8String, unsafe.Pointer(constStringPtr(path)))
+		filePathsPtrs = append(filePathsPtrs, unsafe.Pointer(nsString))
+	}
+	// nsArray := objc.ID(class_NSArray)
+	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	// 清空粘贴板内容
+	pasteboard.Send(sel_clearContents)
+	// var nsArrayClass = objc.GetClass("NSArray")
+
+	nsArray := objc.ID(class_NSArray).Send(sel_arrayWithObjects_count, unsafe.Pointer(&filePathsPtrs[0]), len(filePathsPtrs))
+
+	// 将文件路径数组设置到粘贴板
+	return pasteboard.Send(sel_setPropertyList_forType_, nsArray, _NSPasteboardTypeFiles) != 0
+}
+
+func clipboard_change_count() int {
+	return int(objc.ID(class_NSPasteboard).Send(sel_generalPasteboard).Send(sel_changeCount))
 }

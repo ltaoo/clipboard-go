@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -9,8 +10,81 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+	"github.com/ebitengine/purego/objc"
 
 	"clipboard_t/pkg/clipboard"
+)
+
+func must(sym uintptr, err error) uintptr {
+	if err != nil {
+		panic(err)
+	}
+	return sym
+}
+
+func must2(sym uintptr, err error) uintptr {
+	if err != nil {
+		panic(err)
+	}
+	// dlsym returns a pointer to the object so dereference like this to avoid possible misuse of 'unsafe.Pointer' warning
+	return **(**uintptr)(unsafe.Pointer(&sym))
+}
+
+var (
+	appkit = must(purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_GLOBAL|purego.RTLD_NOW))
+
+	// _NSPasteboardTypeString = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
+	// _NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
+	// _NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
+	// _NSUnicodeStringEncoding = must2(purego.Dlsym(appkit, "NSUnicodeStringEncoding"))
+
+	class_NSPasteboard   = objc.GetClass("NSPasteboard")
+	class_NSData         = objc.GetClass("NSData")
+	class_NSArray        = objc.GetClass("NSArray")
+	class_NSUInteger     = objc.GetClass("NSUInteger")
+	class_NSMutableArray = objc.GetClass("NSMutableArray")
+	class_NSString       = objc.GetClass("NSString")
+	class_NSURL          = objc.GetClass("NSURL")
+
+	sel_init                = objc.RegisterName("init")
+	sel_class               = objc.RegisterName("class")
+	sel_alloc               = objc.RegisterName("alloc")
+	sel_initFileURLWithPath = objc.RegisterName("initFileURLWithPath:")
+	sel_generalPasteboard   = objc.RegisterName("generalPasteboard")
+	sel_clearContents       = objc.RegisterName("clearContents")
+	sel_writeObjects        = objc.RegisterName("writeObjects:")
+	sel_addObject           = objc.RegisterName("addObject:")
+	sel_insertObjectAtIndex = objc.RegisterName("insertObject:atIndex:")
+	sel_arrayWithObject     = objc.RegisterName("arrayWithObject:")
+	sel_fileURLWithPath     = objc.RegisterName("fileURLWithPath:")
+	sel_length              = objc.RegisterName("length")
+	sel_count               = objc.RegisterName("count")
+	sel_path                = objc.RegisterName("path")
+	sel_port                = objc.RegisterName("port")
+	sel_absoluteURL         = objc.RegisterName("absoluteURL")
+	// sel_getBytesLength      = objc.RegisterName("getBytes:length:")
+	// sel_getBytesLength = objc.RegisterName("getBytes:maxLength:usedLength:encoding:options:range:remainingRange:")
+	sel_getBytesLength = objc.RegisterName("getBytes:maxLength:usedLength:encoding:options:range:remainingRange:")
+	// sel_getBytesLength      = objc.RegisterName("getBytes:length:")
+	sel_getBytes          = objc.RegisterName("getBytes:")
+	sel_getBytesMaxLength = objc.RegisterName("getBytes:maxLength:")
+	sel_characterAtIndex  = objc.RegisterName("characterAtIndex:")
+	// sel_dataForType              = objc.RegisterName("dataForType:")
+	// sel_propertyListForType      = objc.RegisterName("propertyListForType:")
+	// sel_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
+	// sel_setDataForType           = objc.RegisterName("setData:forType:")
+	// sel_dataWithBytesLength      = objc.RegisterName("dataWithBytes:length:")
+	sel_dataWithContentsOfURL  = objc.RegisterName("dataWithContentsOfURL:")
+	sel_arrayWithContentsOfURL = objc.RegisterName("arrayWithContentsOfURL:")
+	// sel_changeCount              = objc.RegisterName("changeCount")
+	// sel_count                    = objc.RegisterName("count")
+	sel_UTF8String = objc.RegisterName("UTF8String")
+	// sel_objectAtIndex            = objc.RegisterName("objectAtIndex:")
+	sel_stringWithUTF8String = objc.RegisterName("stringWithUTF8String:")
+	// sel_arrayWithObjects_count   = objc.RegisterName("arrayWithObjects:count:")
 )
 
 func readTextFromClipboard() {
@@ -119,7 +193,35 @@ func readFilepathsFromClipboard() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("粘贴板中的文件列表: %s\n", files)
+	fmt.Printf("粘贴板中的文件列表 %v\n", files)
+	// for _, f := range files {
+	// 	fmt.Println(string(f))
+	// }
+}
+func writeFilesToClipboard(files []string) {
+	fmt.Println("正在向剪贴板写入文件列表...")
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		os.Exit(1)
+		return
+	}
+
+	v, err := StringSliceToByteSlice(files)
+	if err != nil {
+		fmt.Printf(" %v\n", err)
+		return
+	}
+	changed := clipboard.Write(clipboard.FmtFilepath, v)
+	// 默认就能写入成功？
+	// if changed != nil {
+	// 	<-r
+	// 	fmt.Printf("写入成功")
+	// }
+	select {
+	case <-changed:
+		println(`"text data" is no longer available from clipboard.`)
+	}
 }
 
 func readClipboard1() {
@@ -170,8 +272,45 @@ func testChan() {
 	}
 }
 
+// StringSliceToByteSlice 将 []string 转换为 []byte
+func StringSliceToByteSlice(strs []string) ([]byte, error) {
+	return json.Marshal(strs)
+}
+
+// ByteSliceToStringSlice 将 []byte 转换回 []string
+func ByteSliceToStringSlice(b []byte) ([]string, error) {
+	var strs []string
+	err := json.Unmarshal(b, &strs)
+	return strs, err
+}
+
 func main() {
-	// writeTextToClipboard()
-	// readFilepathsFromClipboard()
-	// readTextFromClipboard()
+	arr := objc.ID(class_NSMutableArray).Send(sel_alloc).Send(sel_init)
+
+	s2 := "/Users/mayfair/Documents/deploy_step4.png"
+	ss2 := (*int8)(unsafe.Pointer(&[]byte(s2 + "\x00")[0]))
+	v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
+	url2 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v2)
+	// arr.Send(sel_insertObjectAtIndex, url2, uint(0))
+
+	// s1 := "/Users/mayfair/Documents/deploy_step2.png"
+	s1 := "/Users/mayfair/Documents/StatsCard.tsx"
+	ss1 := (*int8)(unsafe.Pointer(&[]byte(s1 + "\x00")[0]))
+	v1 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss1)
+	url1 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v1)
+
+	arr.Send(sel_addObject, url1)
+	arr.Send(sel_addObject, url2)
+	// arr.Send(sel_insertObjectAtIndex, url1, uint(1))
+
+	the_file_count := uint(arr.Send(sel_count))
+	fmt.Println("the_file_count", the_file_count)
+
+	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	// // 清空粘贴板内容
+	r0 := pasteboard.Send(sel_clearContents)
+	fmt.Println("r0 is", r0)
+
+	r := pasteboard.Send(sel_writeObjects, arr)
+	fmt.Println("r1 is", r)
 }
