@@ -32,6 +32,23 @@ func readTextFromClipboard() {
 
 	fmt.Printf("文本是: %s\n", text)
 }
+func writeTextToClipboard() {
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		os.Exit(1)
+	}
+	changed := clipboard.Write(clipboard.FmtText, []byte("Test content"))
+	// 默认就能写入成功？
+	// if changed != nil {
+	// 	<-r
+	// 	fmt.Printf("写入成功")
+	// }
+	select {
+	case <-changed:
+		println(`"text data" is no longer available from clipboard.`)
+	}
+}
 
 func readImageFromClipboard() {
 	fmt.Println("正在读取剪贴板图片...")
@@ -85,7 +102,6 @@ func readImageFromClipboard() {
 	fmt.Printf("图片已成功保存到: %s\n", absPath)
 }
 
-
 func readFilepathsFromClipboard() {
 	fmt.Println("正在读取剪贴板文件列表...")
 
@@ -107,7 +123,7 @@ func readFilepathsFromClipboard() {
 }
 
 func readClipboard1() {
-	
+
 }
 
 func extractFilePaths(input string) []string {
@@ -125,7 +141,37 @@ func extractFilePaths(input string) []string {
 	return paths
 }
 
+func producer(c chan int) {
+	for i := 0; i < 5; i++ {
+		c <- i
+		time.Sleep(time.Millisecond * 100)
+	}
+	close(c)
+}
+
+func consumer(c chan int) {
+	for num := range c {
+		fmt.Println("消费:", num)
+	}
+}
+func testChan() {
+	ch := make(chan int)
+	go producer(ch)
+	go consumer(ch)
+	for {
+		select {
+		case num, ok := <-ch:
+			if !ok {
+				fmt.Println("通道已关闭，退出循环")
+				return
+			}
+			fmt.Println("从通道获取到数据:", num)
+		}
+	}
+}
+
 func main() {
-	readFilepathsFromClipboard()
+	// writeTextToClipboard()
+	// readFilepathsFromClipboard()
 	// readTextFromClipboard()
 }
