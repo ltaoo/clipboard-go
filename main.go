@@ -38,6 +38,7 @@ var (
 
 	// _NSPasteboardTypeString = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
 	// _NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
+	_NSPasteboardTypeFileURL = must2(purego.Dlsym(appkit, "NSPasteboardTypeFileURL"))
 	// _NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
 	// _NSUnicodeStringEncoding = must2(purego.Dlsym(appkit, "NSUnicodeStringEncoding"))
 
@@ -49,19 +50,20 @@ var (
 	class_NSString       = objc.GetClass("NSString")
 	class_NSURL          = objc.GetClass("NSURL")
 
-	sel_init                = objc.RegisterName("init")
 	sel_class               = objc.RegisterName("class")
+	sel_init                = objc.RegisterName("init")
 	sel_alloc               = objc.RegisterName("alloc")
 	sel_initFileURLWithPath = objc.RegisterName("initFileURLWithPath:")
 	sel_generalPasteboard   = objc.RegisterName("generalPasteboard")
 	sel_clearContents       = objc.RegisterName("clearContents")
 	sel_writeObjects        = objc.RegisterName("writeObjects:")
 	sel_addObject           = objc.RegisterName("addObject:")
+	sel_count               = objc.RegisterName("count")
+	sel_declareTypes_owner  = objc.RegisterName("declareTypes:owner:")
 	sel_insertObjectAtIndex = objc.RegisterName("insertObject:atIndex:")
 	sel_arrayWithObject     = objc.RegisterName("arrayWithObject:")
 	sel_fileURLWithPath     = objc.RegisterName("fileURLWithPath:")
 	sel_length              = objc.RegisterName("length")
-	sel_count               = objc.RegisterName("count")
 	sel_path                = objc.RegisterName("path")
 	sel_port                = objc.RegisterName("port")
 	sel_absoluteURL         = objc.RegisterName("absoluteURL")
@@ -292,7 +294,7 @@ func main() {
 	for _, f := range files {
 		ss2 := (*int8)(unsafe.Pointer(&[]byte(f + "\x00")[0]))
 		v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
-		url2 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v2)
+		url2 := objc.ID(class_NSURL).Send(sel_fileURLWithPath, v2)
 		arr.Send(sel_addObject, url2)
 	}
 
@@ -301,8 +303,11 @@ func main() {
 
 	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
 	// // 清空粘贴板内容
-	r0 := pasteboard.Send(sel_clearContents)
-	fmt.Println("r0 is", r0)
+	pasteboard.Send(sel_clearContents)
+	// fmt.Println("r0 is", r0)
+
+	// [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypeFileURL] owner:nil];
+	pasteboard.Send(sel_declareTypes_owner, objc.ID(class_NSArray).Send(sel_arrayWithObject, _NSPasteboardTypeFileURL))
 
 	r := pasteboard.Send(sel_writeObjects, arr)
 	fmt.Println("r1 is", r)
