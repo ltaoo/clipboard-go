@@ -287,21 +287,14 @@ func ByteSliceToStringSlice(b []byte) ([]string, error) {
 func main() {
 	arr := objc.ID(class_NSMutableArray).Send(sel_alloc).Send(sel_init)
 
-	s2 := "/Users/mayfair/Documents/deploy_step4.png"
-	ss2 := (*int8)(unsafe.Pointer(&[]byte(s2 + "\x00")[0]))
-	v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
-	url2 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v2)
-	// arr.Send(sel_insertObjectAtIndex, url2, uint(0))
+	files := []string{"/Users/mayfair/Documents/deploy_step4.png", "/Users/mayfair/Documents/StatsCard.tsx"}
 
-	// s1 := "/Users/mayfair/Documents/deploy_step2.png"
-	s1 := "/Users/mayfair/Documents/StatsCard.tsx"
-	ss1 := (*int8)(unsafe.Pointer(&[]byte(s1 + "\x00")[0]))
-	v1 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss1)
-	url1 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v1)
-
-	arr.Send(sel_addObject, url1)
-	arr.Send(sel_addObject, url2)
-	// arr.Send(sel_insertObjectAtIndex, url1, uint(1))
+	for _, f := range files {
+		ss2 := (*int8)(unsafe.Pointer(&[]byte(f + "\x00")[0]))
+		v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
+		url2 := objc.ID(class_NSURL).Send(sel_alloc).Send(sel_initFileURLWithPath, v2)
+		arr.Send(sel_addObject, url2)
+	}
 
 	the_file_count := uint(arr.Send(sel_count))
 	fmt.Println("the_file_count", the_file_count)
