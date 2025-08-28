@@ -14,6 +14,7 @@ package clipboard
 import (
 	"bytes"
 	"context"
+	"unsafe"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -27,7 +28,6 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf16"
-	"unsafe"
 
 	"golang.org/x/image/bmp"
 )
@@ -311,8 +311,8 @@ type HDROPHeader struct {
 }
 
 func writeFiles(buf []byte) error {
-	r, _, err := emptyClipboard.Call()
-	if r == 0 {
+	ret, _, err := emptyClipboard.Call()
+	if ret == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
 
@@ -320,7 +320,6 @@ func writeFiles(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-
 	filePaths, err := byte_slice_to_string_slice(buf)
 	if err != nil {
 		return err
@@ -329,14 +328,40 @@ func writeFiles(buf []byte) error {
 		return nil
 	}
 
-	// 计算总的路径长度和HDROPHeader的大小
-	totalLength := uint32(unsafe.Sizeof(HDROPHeader{}))
+	// 计算文件路径的总长度
+	var fileListSize uint32
 	for _, path := range filePaths {
-		totalLength += uint32(len(path)+1) * 2 // 每个字符2字节（UTF - 16），加上null终止符
+		var count uint32
+		ret, _, err := multiByteToWideChar.Call(
+			CP_UTF8,
+			0,
+			uintptr(unsafe.Pointer(syscall.StringBytePtr(path))),
+			uintptr(int32(len(path))),
+			0,
+			0,
+		)
+		if ret == 0 {
+			return fmt.Errorf("MultiByteToWideChar (to get length) for path %s failed: %w", path, err)
+		}
+		count = uint32(ret)
+		fileListSize += count + 1
 	}
 
+	if fileListSize == 0 {
+		return fmt.Errorf("No valid file paths")
+	}
+
+	// 计算总内存大小
+	dropfiles := DROPFILES{
+		p_files: uint32(unsafe.Sizeof(DROPFILES{})),
+		pt:      POINT{x: 0, y: 0},
+		f_nc:    0,
+		f_wide:  1,
+	}
+	memSize := uintptr(unsafe.Sizeof(dropfiles)) + uintptr(fileListSize*2) + 2
+
 	// 分配全局内存
-	hMem, _, err := gAlloc.Call(0x0042, uintptr(totalLength))
+	hMem, _, err := gAlloc.Call(0x0042, memSize)
 	if hMem == 0 {
 		return fmt.Errorf("GlobalAlloc failed: %w", err)
 	}
@@ -349,35 +374,117 @@ func writeFiles(buf []byte) error {
 	}
 	defer gUnlock.Call(hMem)
 
-	// 填充HDROPHeader
-	hdr := (*HDROPHeader)(unsafe.Pointer(p))
-	hdr.pFiles = uint32(len(filePaths))
-	hdr.x = 0
-	hdr.y = 0
-	hdr.fNC = 0
-	hdr.fWide = 1
+	// 填充DROPFILES结构体
+	ptr := (*DROPFILES)(unsafe.Pointer(p))
+	*ptr = dropfiles
 
 	// 填充文件路径
-	offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
+	dataPtr := (*[1 << 30]uint16)(unsafe.Pointer(uintptr(p) + unsafe.Sizeof(dropfiles)))
 	for _, path := range filePaths {
-		utf16Path, err := syscall.UTF16FromString(path)
-		if err != nil {
-			return fmt.Errorf("UTF16FromString failed: %w", err)
+		var count uint32
+		ret, _, err := multiByteToWideChar.Call(
+			CP_UTF8,
+			0,
+			uintptr(unsafe.Pointer(syscall.StringBytePtr(path))),
+			uintptr(int32(len(path))),
+			uintptr(unsafe.Pointer(&dataPtr[0])),
+			uintptr(int32(fileListSize)),
+		)
+		if ret == 0 {
+			return fmt.Errorf("MultiByteToWideChar (to write path) for path %s failed: %w", path, err)
 		}
-		_, _, err = lstrcpyW.Call(p+offset, uintptr(unsafe.Pointer(&utf16Path[0])))
-		if err != nil {
-			return fmt.Errorf("lstrcpyW failed: %w", err)
-		}
-		offset += uintptr((len(utf16Path) + 1) * 2)
+		count = uint32(ret)
+		dataPtr = (*[1 << 30]uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(&dataPtr[count])) + 2))
+		// *dataPtr = 0
 	}
+	// 添加最终的null终止符
+	// *(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + 2)) = 0
+	*(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + 2)) = uint16(0)
 
 	// 设置剪贴板数据
-	ret, _, err = setClipboardData.Call(cFmtFilepaths, hMem)
+	ret, _, err = setClipboardData.Call(CF_HDROP, hMem)
 	if ret == 0 {
 		return fmt.Errorf("SetClipboardData failed: %w", err)
 	}
-
 	return nil
+
+	// // 计算总的路径长度和HDROPHeader的大小
+	// totalLength := uint32(unsafe.Sizeof(HDROPHeader{}))
+	// for _, path := range filePaths {
+	// 	fmt.Println("the file prepare write to clipboard", path)
+	// 	totalLength += uint32(len(path)+1) * 2 // 每个字符2字节（UTF - 16），加上null终止符
+	// }
+
+	// // 分配全局内存
+	// hMem, _, err := gAlloc.Call(0x0042, uintptr(totalLength))
+	// if hMem == 0 {
+	// 	fmt.Println("e1", err.Error())
+	// 	return fmt.Errorf("GlobalAlloc failed: %w", err)
+	// }
+	// defer gFree.Call(hMem)
+
+	// // 锁定内存
+	// p, _, err := gLock.Call(hMem)
+	// if p == 0 {
+	// 	fmt.Println("e2", err.Error())
+	// 	return fmt.Errorf("GlobalLock failed: %w", err)
+	// }
+	// defer gUnlock.Call(hMem)
+
+	// // 填充HDROPHeader
+	// hdr := (*HDROPHeader)(unsafe.Pointer(p))
+	// hdr.pFiles = uint32(len(filePaths))
+	// hdr.x = 0
+	// hdr.y = 0
+	// hdr.fNC = 0
+	// hdr.fWide = 1
+
+	// offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
+	// for _, path := range filePaths {
+	// 	utf16Path, err := syscall.UTF16FromString(path)
+	// 	if err != nil {
+	// 		fmt.Println("e3", err.Error())
+	// 		return fmt.Errorf("UTF16FromString failed: %w", err)
+	// 	}
+	// 	// 手动复制UTF - 16字符串到内存
+	// 	dst := (*[1 << 30]uint16)(unsafe.Pointer(p + offset))
+	// 	for i, v := range utf16Path {
+	// 		dst[i] = v
+	// 	}
+	// 	// 添加null终止符
+	// 	dst[len(utf16Path)] = 0
+	// 	offset += uintptr((len(utf16Path)+1) * 2)
+	// }
+
+	// // 设置剪贴板数据
+	// r, _, err = setClipboardData.Call(cFmtFilepaths, hMem)
+	// fmt.Println("after setClipboardData", r, err.Error())
+	// if r == 0 {
+	// 	return fmt.Errorf("SetClipboardData failed: %w", err)
+	// }
+	// return nil
+
+	// 填充文件路径
+	// offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
+	// for _, path := range filePaths {
+	// 	utf16Path, err := syscall.UTF16FromString(path)
+	// 	if err != nil {
+	// 		return fmt.Errorf("UTF16FromString failed: %w", err)
+	// 	}
+	// 	_, _, err = lstrcpyW.Call(p+offset, uintptr(unsafe.Pointer(&utf16Path[0])))
+	// 	if err != nil {
+	// 		return fmt.Errorf("lstrcpyW failed: %w", err)
+	// 	}
+	// 	offset += uintptr((len(utf16Path) + 1) * 2)
+	// }
+
+	// // 设置剪贴板数据
+	// ret, _, err := setClipboardData.Call(cFmtFilepaths, hMem)
+	// if ret == 0 {
+	// 	return fmt.Errorf("SetClipboardData failed: %w", err)
+	// }
+
+	// return nil
 
 	// infob := make([]byte, int(unsafe.Sizeof(info)))
 	// for i, v := range *(*[unsafe.Sizeof(info)]byte)(unsafe.Pointer(&info)) {
@@ -414,10 +521,12 @@ func writeFiles(buf []byte) error {
 func readFilepaths() ([]byte, error) {
 	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
 	if hMem == 0 {
+		fmt.Println("f1", err.Error())
 		return nil, err
 	}
 	p, _, err := gLock.Call(hMem)
 	if p == 0 {
+		fmt.Println("f2", err.Error())
 		return nil, err
 	}
 	defer gUnlock.Call(hMem)
@@ -434,6 +543,7 @@ func readFilepaths() ([]byte, error) {
 	var count uint32
 	ret, v, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
 	if ret == 0 {
+		fmt.Println("f3", err.Error())
 		return nil, fmt.Errorf("DragQueryFile (to get count) failed: %w", err)
 	}
 
@@ -617,6 +727,10 @@ const (
 	// https://jpsoft.com/forums/threads/detecting-clipboard-format.5225/
 	cFmtDataObject = 49161 // Shift+Win+s, returned from enumClipboardFormats
 	gmemMoveable   = 0x0002
+
+	CP_UTF8    = 65001
+	CF_HDROP   = 15
+	WM_DROPFILES = 0x0233
 )
 
 // BITMAPV5Header structure, see:
@@ -666,6 +780,22 @@ type bitmapHeader struct {
 	ClrImportant  uint32
 }
 
+
+// 定义POINT结构体
+type POINT struct {
+    x int32
+    y int32
+}
+
+// 定义DROPFILES结构体
+type DROPFILES struct {
+    p_files uint32
+    pt      POINT
+    f_nc    int32
+    f_wide  int32
+}
+
+
 // Calling a Windows DLL, see:
 // https://github.com/golang/go/wiki/WindowsDLLs
 var (
@@ -710,7 +840,7 @@ var (
 	// a valid clipboard format.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
 	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
-	lstrcpyW                 = user32.MustFindProc("lstrcpyW")
+	// lstrcpyW                 = user32.MustFindProc("lstrcpyW")
 
 	shell32       = syscall.NewLazyDLL("shell32")
 	dragQueryFile = shell32.NewProc("DragQueryFileW")
@@ -722,6 +852,7 @@ var (
 	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globallock
 	gLock = kernel32.NewProc("GlobalLock")
 	gSize = kernel32.NewProc("GlobalSize")
+	multiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
 	// Decrements the lock count associated with a memory object that was
 	// allocated with GMEM_MOVEABLE. This function has no effect on memory
 	// objects allocated with GMEM_FIXED.
