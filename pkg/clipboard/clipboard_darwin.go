@@ -20,18 +20,24 @@ var (
 	_NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
 	_NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
 
-	class_NSPasteboard = objc.GetClass("NSPasteboard")
-	class_NSData       = objc.GetClass("NSData")
-	class_NSArray      = objc.GetClass("NSArray")
-	class_NSString     = objc.GetClass("NSString")
-	class_NSURL        = objc.GetClass("NSURL")
+	class_NSPasteboard   = objc.GetClass("NSPasteboard")
+	class_NSData         = objc.GetClass("NSData")
+	class_NSMutableArray = objc.GetClass("NSMutableArray")
+	class_NSArray        = objc.GetClass("NSArray")
+	class_NSString       = objc.GetClass("NSString")
+	class_NSURL          = objc.GetClass("NSURL")
 
+	sel_init                     = objc.RegisterName("init")
+	sel_alloc                    = objc.RegisterName("alloc")
 	sel_generalPasteboard        = objc.RegisterName("generalPasteboard")
 	sel_length                   = objc.RegisterName("length")
 	sel_getBytesLength           = objc.RegisterName("getBytes:length:")
 	sel_dataForType              = objc.RegisterName("dataForType:")
 	sel_propertyListForType      = objc.RegisterName("propertyListForType:")
+	sel_addObject                = objc.RegisterName("addObject:")
+	sel_writeObjects             = objc.RegisterName("writeObjects:")
 	sel_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
+	sel_fileURLWithPath          = objc.RegisterName("fileURLWithPath:")
 	sel_clearContents            = objc.RegisterName("clearContents")
 	sel_setDataForType           = objc.RegisterName("setData:forType:")
 	sel_dataWithBytesLength      = objc.RegisterName("dataWithBytes:length:")
@@ -245,22 +251,39 @@ func clipboard_write_files(bytes []byte) bool {
 	if err != nil {
 		return false
 	}
-	var filePathsPtrs []unsafe.Pointer
-	for _, path := range files {
-		fmt.Println(path)
-		nsString := objc.ID(class_NSString).Send(sel_stringWithUTF8String, unsafe.Pointer(constStringPtr(path)))
-		filePathsPtrs = append(filePathsPtrs, unsafe.Pointer(nsString))
+	// var filePathsPtrs []unsafe.Pointer
+	// for _, path := range files {
+	// 	fmt.Println(path)
+	// 	nsString := objc.ID(class_NSString).Send(sel_stringWithUTF8String, unsafe.Pointer(constStringPtr(path)))
+	// 	filePathsPtrs = append(filePathsPtrs, unsafe.Pointer(nsString))
+	// }
+	// // nsArray := objc.ID(class_NSArray)
+	// pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
+	// // 清空粘贴板内容
+	// pasteboard.Send(sel_clearContents)
+	// // var nsArrayClass = objc.GetClass("NSArray")
+
+	// nsArray := objc.ID(class_NSArray).Send(sel_arrayWithObjects_count, unsafe.Pointer(&filePathsPtrs[0]), len(filePathsPtrs))
+
+	// // 将文件路径数组设置到粘贴板
+	// return pasteboard.Send(sel_setPropertyList_forType_, nsArray, _NSPasteboardTypeFiles) != 0
+	arr := objc.ID(class_NSMutableArray).Send(sel_alloc).Send(sel_init)
+
+	for _, f := range files {
+		ss2 := (*int8)(unsafe.Pointer(&[]byte(f + "\x00")[0]))
+		v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
+		url2 := objc.ID(class_NSURL).Send(sel_fileURLWithPath, v2)
+		arr.Send(sel_addObject, url2)
 	}
-	// nsArray := objc.ID(class_NSArray)
+
+	the_file_count := uint(arr.Send(sel_count))
+	fmt.Println("the_file_count", the_file_count)
+
 	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	// 清空粘贴板内容
 	pasteboard.Send(sel_clearContents)
-	// var nsArrayClass = objc.GetClass("NSArray")
 
-	nsArray := objc.ID(class_NSArray).Send(sel_arrayWithObjects_count, unsafe.Pointer(&filePathsPtrs[0]), len(filePathsPtrs))
-
-	// 将文件路径数组设置到粘贴板
-	return pasteboard.Send(sel_setPropertyList_forType_, nsArray, _NSPasteboardTypeFiles) != 0
+	pasteboard.Send(sel_writeObjects, arr)
+	return pasteboard.Send(sel_propertyListForType, _NSPasteboardTypeFiles) != 0
 }
 
 func clipboard_change_count() int {

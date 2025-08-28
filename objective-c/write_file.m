@@ -28,38 +28,35 @@ int main(int argc, const char * argv[]) {
         // }
 
 // --------------
-        // 1. Get the general pasteboard
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-
-        // 2. Clear existing contents
         [pasteboard clearContents];
-
-        // // 3. Create an array of file URLs
         NSMutableArray *filesToCopy = [NSMutableArray array];
-
-        // Add file paths to the array (replace with your actual file paths)
-        NSString *filePath1 = @"/Users/mayfair/Documents/deploy_step2.png";
-        NSString *filePath2 = @"/Users/mayfair/Documents/deploy_step4.png";
-
+        NSString *filePath1 = @"/Users/litao/Downloads/avatar.png";
+        // NSString *filePath1 = @"/Users/mayfair/Documents/deploy_step2.png";
+        NSString *filePath2 = @"/Users/litao/Downloads/face.png";
+        // NSString *filePath2 = @"/Users/mayfair/Documents/deploy_step4.png";
         NSURL *fileURL1 = [NSURL fileURLWithPath:filePath1];
         NSURL *fileURL2 = [NSURL fileURLWithPath:filePath2];
-
         if (fileURL1) {
             [filesToCopy addObject:fileURL1];
+            // [filesToCopy addObject:filePath1];
+            NSLog(@"fileURL2 absoluteString: %@", [fileURL1 absoluteString]);
         } else {
             NSLog(@"Error: Could not create URL for %@", filePath1);
         }
-
         if (fileURL2) {
             [filesToCopy addObject:fileURL2];
+            // [filesToCopy addObject:filePath2];
+            NSLog(@"fileURL2 absoluteString: %@", [fileURL2 absoluteString]);
         } else {
             NSLog(@"Error: Could not create URL for %@", filePath2);
         }
-        [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypeFileURL] owner:nil];
-
-        // 4. Write the URLs to the pasteboard
+        // CFStringRef fileURLUTI = CFSTR("public.file-url");
+        // UTTypeRef fileURLType = UTTypeCreate(fileURLUTI, NULL);
+        // [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypeFileURL] owner:nil];
+        // [pasteboard setPropertyList:filesToCopy forType:NSPasteboardTypeFileURL];
+        // [pasteboard setPropertyList:filesToCopy forType:NSPasteboardTypeFileURL];
         BOOL success = [pasteboard writeObjects:filesToCopy];
-
         if (success) {
             NSLog(@"Successfully copied %lu files to the clipboard.", (unsigned long)[filesToCopy count]);
         } else {
