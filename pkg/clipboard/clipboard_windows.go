@@ -15,14 +15,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"reflect"
-	"strings"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -295,6 +296,119 @@ func writeImage(buf []byte) error {
 	return nil
 }
 
+func byte_slice_to_string_slice(b []byte) ([]string, error) {
+	var strs []string
+	err := json.Unmarshal(b, &strs)
+	return strs, err
+}
+
+type HDROPHeader struct {
+	pFiles uint32
+	x      int16
+	y      int16
+	fNC    uint32
+	fWide  uint32
+}
+
+func writeFiles(buf []byte) error {
+	r, _, err := emptyClipboard.Call()
+	if r == 0 {
+		return fmt.Errorf("failed to clear clipboard: %w", err)
+	}
+
+	// empty text, we are done here.
+	if len(buf) == 0 {
+		return nil
+	}
+
+	filePaths, err := byte_slice_to_string_slice(buf)
+	if err != nil {
+		return err
+	}
+	if len(filePaths) == 0 {
+		return nil
+	}
+
+	// 计算总的路径长度和HDROPHeader的大小
+	totalLength := uint32(unsafe.Sizeof(HDROPHeader{}))
+	for _, path := range filePaths {
+		totalLength += uint32(len(path)+1) * 2 // 每个字符2字节（UTF - 16），加上null终止符
+	}
+
+	// 分配全局内存
+	hMem, _, err := gAlloc.Call(0x0042, uintptr(totalLength))
+	if hMem == 0 {
+		return fmt.Errorf("GlobalAlloc failed: %w", err)
+	}
+	defer gFree.Call(hMem)
+
+	// 锁定内存
+	p, _, err := gLock.Call(hMem)
+	if p == 0 {
+		return fmt.Errorf("GlobalLock failed: %w", err)
+	}
+	defer gUnlock.Call(hMem)
+
+	// 填充HDROPHeader
+	hdr := (*HDROPHeader)(unsafe.Pointer(p))
+	hdr.pFiles = uint32(len(filePaths))
+	hdr.x = 0
+	hdr.y = 0
+	hdr.fNC = 0
+	hdr.fWide = 1
+
+	// 填充文件路径
+	offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
+	for _, path := range filePaths {
+		utf16Path, err := syscall.UTF16FromString(path)
+		if err != nil {
+			return fmt.Errorf("UTF16FromString failed: %w", err)
+		}
+		_, _, err = lstrcpyW.Call(p+offset, uintptr(unsafe.Pointer(&utf16Path[0])))
+		if err != nil {
+			return fmt.Errorf("lstrcpyW failed: %w", err)
+		}
+		offset += uintptr((len(utf16Path) + 1) * 2)
+	}
+
+	// 设置剪贴板数据
+	ret, _, err = setClipboardData.Call(cFmtFilepaths, hMem)
+	if ret == 0 {
+		return fmt.Errorf("SetClipboardData failed: %w", err)
+	}
+
+	return nil
+
+	// infob := make([]byte, int(unsafe.Sizeof(info)))
+	// for i, v := range *(*[unsafe.Sizeof(info)]byte)(unsafe.Pointer(&info)) {
+	// 	infob[i] = v
+	// }
+	// copy(data[:], infob[:])
+
+	// hMem, _, err := gAlloc.Call(gmemMoveable,
+	// 	uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
+	// if hMem == 0 {
+	// 	return fmt.Errorf("failed to alloc global memory: %w", err)
+	// }
+
+	// p, _, err := gLock.Call(hMem)
+	// if p == 0 {
+	// 	return fmt.Errorf("failed to lock global memory: %w", err)
+	// }
+	// defer gUnlock.Call(hMem)
+
+	// memMove.Call(p, uintptr(unsafe.Pointer(&data[0])),
+	// 	uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
+
+	// v, _, err := setClipboardData.Call(cFmtFilepaths, hMem)
+	// if v == 0 {
+	// 	gFree.Call(hMem)
+	// 	return fmt.Errorf("failed to set files to clipboard: %w", err)
+	// }
+
+	// return nil
+}
+
 // https://stackoverflow.com/questions/77205618/when-a-file-is-on-the-windows-clipboard-how-can-i-in-python-access-its-path
 
 func readFilepaths() ([]byte, error) {
@@ -307,7 +421,6 @@ func readFilepaths() ([]byte, error) {
 		return nil, err
 	}
 	defer gUnlock.Call(hMem)
-
 
 	// 验证HDROP结构的内存布局
 	type HDROPHeader struct {
@@ -325,41 +438,12 @@ func readFilepaths() ([]byte, error) {
 	}
 
 	fmt.Println("num files", ret, v, err)
-	// count = uint32(ret)
 	fileCount := uint32(ret)
 
 	// // 存储文件路径
 	filePaths := make([]string, fileCount)
 	for i := uint32(0); i < fileCount; i++ {
-		// var length uint32
-		// // dragQueryFile.Call(uintptr(p), i, 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		// dragQueryFile.Call(uintptr(p), uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-
-		// buffer := make([]uint16, length+1)
-		// // dragQueryFile.Call(uintptr(p), i, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		// dragQueryFile.Call(uintptr(p), uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-
-		// filePaths = append(filePaths, syscall.UTF16ToString(buffer))
-
-
-		// var length uint32
-		// ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		// fmt.Println("find the 1", ret, err)
-		// if ret == 0 {
-		// 	return nil, fmt.Errorf("DragQueryFile (to get length) for file %d failed: %w", i, err)
-		// }
-
-		// buffer := make([]uint16, length+1)
-		// ret, _, err = dragQueryFile.Call(p, uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		// fmt.Println("find the 2", ret, err)
-		// if ret == 0 {
-		// 	return nil, fmt.Errorf("DragQueryFile (to get path) for file %d failed: %w", i, err)
-		// }
-
-		// filePaths = append(filePaths, syscall.UTF16ToString(buffer))
-
-
-		 // 获取文件路径所需长度（不包含 null 终止符）
+		// 获取文件路径所需长度（不包含 null 终止符）
 		var length uint32
 		ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
 		if ret == 0 {
@@ -375,7 +459,6 @@ func readFilepaths() ([]byte, error) {
 
 		filePaths = append(filePaths, syscall.UTF16ToString(buffer[:length]))
 	}
-	// return []byte(string(utf16.Decode(filePaths))), nil
 	joinedPaths := strings.Join(filePaths, "\n")
 	return []byte(joinedPaths), nil
 }
@@ -449,6 +532,13 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 		switch t {
 		case FmtImage:
 			err := writeImage(buf)
+			if err != nil {
+				errch <- err
+				closeClipboard.Call()
+				return
+			}
+		case FmtFilepath:
+			err := writeFiles(buf)
 			if err != nil {
 				errch <- err
 				closeClipboard.Call()
@@ -620,9 +710,10 @@ var (
 	// a valid clipboard format.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
 	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
+	lstrcpyW                 = user32.MustFindProc("lstrcpyW")
 
-	shell32 = syscall.NewLazyDLL("shell32")
-	dragQueryFile  = shell32.NewProc("DragQueryFileW")
+	shell32       = syscall.NewLazyDLL("shell32")
+	dragQueryFile = shell32.NewProc("DragQueryFileW")
 
 	kernel32 = syscall.NewLazyDLL("kernel32")
 
