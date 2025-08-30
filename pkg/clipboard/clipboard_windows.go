@@ -14,7 +14,6 @@ package clipboard
 import (
 	"bytes"
 	"context"
-	"unsafe"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,7 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf16"
+	"unsafe"
 
 	"golang.org/x/image/bmp"
 )
@@ -125,7 +125,7 @@ func readImage() ([]byte, error) {
 
 	// maybe deal with other formats?
 	if info.BitCount != 32 {
-		return nil, errUnsupported
+		return nil, err_unsupported
 	}
 
 	var data []byte
@@ -595,7 +595,7 @@ func read(t Format) (buf []byte, err error) {
 	r, _, err := isClipboardFormatAvailable.Call(format)
 	fmt.Println("after check clipboard ", r, format)
 	if r == 0 {
-		return nil, errUnavailable
+		return nil, err_unavailable
 	}
 
 	// try again until open clipboard successed
@@ -688,8 +688,8 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	return changed, nil
 }
 
-func watch(ctx context.Context, t Format) <-chan []byte {
-	recv := make(chan []byte, 1)
+func watch(ctx context.Context) <-chan ClipboardContent {
+	recv := make(chan ClipboardContent, 1)
 	ready := make(chan struct{})
 	go func() {
 		// not sure if we are too slow or the user too fast :)
@@ -704,18 +704,72 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 			case <-ti.C:
 				cur, _, _ := getClipboardSequenceNumber.Call()
 				if cnt != cur {
-					b := Read(t)
-					if b == nil {
-						continue
-					}
-					recv <- b
 					cnt = cur
+					content := clipboard_read_content()
+					recv <- content
 				}
 			}
 		}
 	}()
 	<-ready
 	return recv
+}
+
+func clipboard_read_content() ClipboardContent {
+	cur_types := clipboard_cur_types()
+	var maybe_type string
+	for _, t := range cur_types {
+		if t == "public.utf8-plain-text" {
+			maybe_type = t
+			b, err := read(FmtText)
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+		if t == "public.file-url" {
+			maybe_type = t
+			b, err := read(FmtFilepath)
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+		if t == "public.png" {
+			maybe_type = t
+			b, err := Read(FmtImage)
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+	}
+	type_text := strings.Join(cur_types, "\n")
+	return ClipboardContent{
+		Type:  type_text,
+		Data:  []byte{},
+		Error: fmt.Errorf("无法处理的内容类型"),
+	}
+}
+
+func clipboard_cur_types() []string {
+	return []string{}
 }
 
 const (
@@ -728,8 +782,8 @@ const (
 	cFmtDataObject = 49161 // Shift+Win+s, returned from enumClipboardFormats
 	gmemMoveable   = 0x0002
 
-	CP_UTF8    = 65001
-	CF_HDROP   = 15
+	CP_UTF8      = 65001
+	CF_HDROP     = 15
 	WM_DROPFILES = 0x0233
 )
 
@@ -780,21 +834,19 @@ type bitmapHeader struct {
 	ClrImportant  uint32
 }
 
-
 // 定义POINT结构体
 type POINT struct {
-    x int32
-    y int32
+	x int32
+	y int32
 }
 
 // 定义DROPFILES结构体
 type DROPFILES struct {
-    p_files uint32
-    pt      POINT
-    f_nc    int32
-    f_wide  int32
+	p_files uint32
+	pt      POINT
+	f_nc    int32
+	f_wide  int32
 }
-
 
 // Calling a Windows DLL, see:
 // https://github.com/golang/go/wiki/WindowsDLLs
@@ -850,8 +902,8 @@ var (
 	// Locks a global memory object and returns a pointer to the first
 	// byte of the object's memory block.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globallock
-	gLock = kernel32.NewProc("GlobalLock")
-	gSize = kernel32.NewProc("GlobalSize")
+	gLock               = kernel32.NewProc("GlobalLock")
+	gSize               = kernel32.NewProc("GlobalSize")
 	multiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
 	// Decrements the lock count associated with a memory object that was
 	// allocated with GMEM_MOVEABLE. This function has no effect on memory

@@ -18,7 +18,6 @@ void clipboard_write_string(uintptr_t java_vm, uintptr_t jni_env, uintptr_t ctx,
 */
 import "C"
 import (
-	"bytes"
 	"context"
 	"time"
 	"unsafe"
@@ -76,8 +75,8 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	}
 }
 
-func watch(ctx context.Context, t Format) <-chan []byte {
-	recv := make(chan []byte, 1)
+func watch(ctx context.Context) <-chan ClipboardContent {
+	recv := make(chan ClipboardContent, 1)
 	ti := time.NewTicker(time.Second)
 	last := Read(t)
 	go func() {
@@ -86,15 +85,15 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 			case <-ctx.Done():
 				close(recv)
 				return
-			case <-ti.C:
-				b := Read(t)
-				if b == nil {
-					continue
-				}
-				if bytes.Compare(last, b) != 0 {
-					recv <- b
-					last = b
-				}
+				// case <-ti.C:
+				// 	b := Read(t)
+				// 	if b == nil {
+				// 		continue
+				// 	}
+				// 	if bytes.Compare(last, b) != 0 {
+				// 		recv <- b
+				// 		last = b
+				// 	}
 			}
 		}
 	}()

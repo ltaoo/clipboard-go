@@ -4,49 +4,13 @@ package clipboard
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
-)
-
-var (
-	appkit = must(purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_GLOBAL|purego.RTLD_NOW))
-
-	_NSPasteboardTypeString = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
-	_NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
-	_NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
-
-	class_NSPasteboard   = objc.GetClass("NSPasteboard")
-	class_NSData         = objc.GetClass("NSData")
-	class_NSMutableArray = objc.GetClass("NSMutableArray")
-	class_NSArray        = objc.GetClass("NSArray")
-	class_NSString       = objc.GetClass("NSString")
-	class_NSURL          = objc.GetClass("NSURL")
-
-	sel_init                     = objc.RegisterName("init")
-	sel_alloc                    = objc.RegisterName("alloc")
-	sel_generalPasteboard        = objc.RegisterName("generalPasteboard")
-	sel_length                   = objc.RegisterName("length")
-	sel_getBytesLength           = objc.RegisterName("getBytes:length:")
-	sel_dataForType              = objc.RegisterName("dataForType:")
-	sel_propertyListForType      = objc.RegisterName("propertyListForType:")
-	sel_addObject                = objc.RegisterName("addObject:")
-	sel_writeObjects             = objc.RegisterName("writeObjects:")
-	sel_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
-	sel_fileURLWithPath          = objc.RegisterName("fileURLWithPath:")
-	sel_clearContents            = objc.RegisterName("clearContents")
-	sel_setDataForType           = objc.RegisterName("setData:forType:")
-	sel_dataWithBytesLength      = objc.RegisterName("dataWithBytes:length:")
-	sel_changeCount              = objc.RegisterName("changeCount")
-	sel_count                    = objc.RegisterName("count")
-	sel_UTF8String               = objc.RegisterName("UTF8String")
-	sel_objectAtIndex            = objc.RegisterName("objectAtIndex:")
-	sel_stringWithUTF8String     = objc.RegisterName("stringWithUTF8String:")
-	sel_arrayWithObjects_count   = objc.RegisterName("arrayWithObjects:count:")
 )
 
 func must(sym uintptr, err error) uintptr {
@@ -64,48 +28,92 @@ func must2(sym uintptr, err error) uintptr {
 	return **(**uintptr)(unsafe.Pointer(&sym))
 }
 
+var (
+	appkit = must(purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_GLOBAL|purego.RTLD_NOW))
+
+	_NSWorkspace          = objc.GetClass("NSWorkspace")
+	_sharedWorkspace      = objc.RegisterName("sharedWorkspace")
+	_frontmostApplication = objc.RegisterName("frontmostApplication")
+	_localizedName        = objc.RegisterName("localizedName")
+
+	_NSPasteboard             = objc.GetClass("NSPasteboard")
+	_generalPasteboard        = objc.RegisterName("generalPasteboard")
+	_clearContents            = objc.RegisterName("clearContents")
+	_types                    = objc.RegisterName("types")
+	_changeCount              = objc.RegisterName("changeCount")
+	_dataForType              = objc.RegisterName("dataForType:")
+	_setDataForType           = objc.RegisterName("setData:forType:")
+	_propertyListForType      = objc.RegisterName("propertyListForType:")
+	_writeObjects             = objc.RegisterName("writeObjects:")
+	_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
+	_NSPasteboardTypeString   = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
+	_NSPasteboardTypePNG      = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
+	_NSPasteboardTypeFiles    = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
+
+	_NSMutableArray         = objc.GetClass("NSMutableArray")
+	_NSArray                = objc.GetClass("NSArray")
+	_objectAtIndex          = objc.RegisterName("objectAtIndex:")
+	_arrayWithObjects_count = objc.RegisterName("arrayWithObjects:count:")
+	_addObject              = objc.RegisterName("addObject:")
+	_getBytesLength         = objc.RegisterName("getBytes:length:")
+	_dataWithBytesLength    = objc.RegisterName("dataWithBytes:length:")
+
+	_NSData               = objc.GetClass("NSData")
+	_NSString             = objc.GetClass("NSString")
+	_UTF8String           = objc.RegisterName("UTF8String")
+	_stringWithUTF8String = objc.RegisterName("stringWithUTF8String:")
+
+	_NSURL           = objc.GetClass("NSURL")
+	_fileURLWithPath = objc.RegisterName("fileURLWithPath:")
+
+	_init   = objc.RegisterName("init")
+	_alloc  = objc.RegisterName("alloc")
+	_length = objc.RegisterName("length")
+	_count  = objc.RegisterName("count")
+)
+
 func initialize() error { return nil }
 
 func read(t Format) (buf []byte, err error) {
 	switch t {
-	case FmtText:
-		return clipboard_read_string(), nil
-	case FmtImage:
-		return clipboard_read_image(), nil
-	case FmtFilepath:
-		return clipboard_read_files(), nil
+	// case FmtText:
+	// 	return read_text(), nil
+	// case FmtImage:
+	// 	return read_image(), nil
+	// case FmtFilepath:
+	// 	return read_files(), nil
 	}
-	return nil, errUnavailable
+	return nil, err_unavailable
 }
 
 func write(t Format, buf []byte) (<-chan struct{}, error) {
-	var ok bool
+	// var ok bool
 	switch t {
-	case FmtText:
-		if len(buf) == 0 {
-			ok = clipboard_write_string(nil)
-		} else {
-			ok = clipboard_write_string(buf)
+	// case FmtText:
+	// 	if len(buf) == 0 {
+	// 		ok = write_text(nil)
+	// 	} else {
+	// 		ok = write_text(buf)
 
-		}
-	case FmtImage:
-		if len(buf) == 0 {
-			ok = clipboard_write_image(nil)
-		} else {
-			ok = clipboard_write_image(buf)
-		}
-	case FmtFilepath:
-		if len(buf) == 0 {
-			ok = clipboard_write_files(nil)
-		} else {
-			ok = clipboard_write_files(buf)
-		}
+	// 	}
+	// case FmtImage:
+	// 	if len(buf) == 0 {
+	// 		ok = write_image(nil)
+	// 	} else {
+	// 		ok = write_image(buf)
+	// 	}
+	// case FmtFilepath:
+	// 	if len(buf) == 0 {
+	// 		ok = write_files(nil)
+	// 	} else {
+	// 		ok = write_files(buf)
+	// 	}
 	default:
-		return nil, errUnsupported
+		return nil, err_unsupported
 	}
-	if !ok {
-		return nil, errUnavailable
-	}
+	// if !ok {
+	// 	return nil, err_unavailable
+	// }
 	changed := make(chan struct{}, 1)
 	cnt := clipboard_change_count()
 	go func() {
@@ -123,10 +131,10 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	return changed, nil
 }
 
-func watch(ctx context.Context, t Format) <-chan []byte {
-	recv := make(chan []byte, 1)
+func watch(ctx context.Context) <-chan ClipboardContent {
+	recv := make(chan ClipboardContent, 1)
 	ti := time.NewTicker(time.Second)
-	lastCount := clipboard_change_count()
+	prev_count := clipboard_change_count()
 	go func() {
 		for {
 			select {
@@ -134,14 +142,12 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 				close(recv)
 				return
 			case <-ti.C:
-				this := clipboard_change_count()
-				if lastCount != this {
-					b := Read(t)
-					if b == nil {
-						continue
-					}
-					recv <- b
-					lastCount = this
+				cur_count := clipboard_change_count()
+				if prev_count != cur_count {
+					prev_count = cur_count
+
+					content := read_content_with_type()
+					recv <- content
 				}
 			}
 		}
@@ -149,34 +155,213 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 	return recv
 }
 
-func clipboard_read_string() []byte {
-	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	var data = pasteboard.Send(sel_dataForType, _NSPasteboardTypeString)
-	if data == 0 {
-		return nil
+func read_content_with_type() ClipboardContent {
+	cur_types := clipboard_cur_types()
+	var maybe_type string
+	for _, t := range cur_types {
+		if t == "public.utf8-plain-text" {
+			maybe_type = t
+			text, err := read_text()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  text,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败，因为%v", maybe_type, err.Error())
+			}
+			return d
+		}
+		if t == "public.file-url" {
+			maybe_type = t
+			files, err := read_files()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  files,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败，因为%v", maybe_type, err.Error())
+			}
+			return d
+
+		}
+		if t == "public.png" {
+			maybe_type = t
+			image, err := read_image()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  image,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败，因为%v", maybe_type, err.Error())
+			}
+			return d
+		}
 	}
-	var size = uint(data.Send(sel_length))
+	type_text := strings.Join(cur_types, "\n")
+	return ClipboardContent{
+		Type:  type_text,
+		Data:  nil,
+		Error: fmt.Errorf("无法处理的内容类型"),
+	}
+}
+
+func read_text() (string, error) {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	__data := __pasteboard.Send(_dataForType, _NSPasteboardTypeString)
+	if __data == 0 {
+		return "", fmt.Errorf("读取数据失败")
+	}
+	size := uint(__data.Send(_length))
 	if size == 0 {
-		return nil
+		return "", fmt.Errorf("获取文本长度失败")
 	}
 	out := make([]byte, size)
-	data.Send(sel_getBytesLength, unsafe.SliceData(out), size)
-	return out
-}
-
-func clipboard_read_image() []byte {
-	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	data := pasteboard.Send(sel_dataForType, _NSPasteboardTypePNG)
-	if data == 0 {
-		return nil
+	__r := __data.Send(_getBytesLength, unsafe.SliceData(out), size)
+	if __r == 0 {
+		return "", fmt.Errorf("转换数据失败")
 	}
-	size := data.Send(sel_length)
-	out := make([]byte, size)
-	data.Send(sel_getBytesLength, unsafe.SliceData(out), size)
-	return out
+	return string(out), nil
 }
 
-func readUTF8String(ptr unsafe.Pointer) string {
+func read_image() ([]byte, error) {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	__data := __pasteboard.Send(_dataForType, _NSPasteboardTypePNG)
+	if __data == 0 {
+		return nil, fmt.Errorf("读取数据失败")
+	}
+	size := uint(__data.Send(_length))
+	if size == 0 {
+		return nil, fmt.Errorf("图片内容为空")
+	}
+	out := make([]byte, size)
+	__r := __data.Send(_getBytesLength, unsafe.SliceData(out), size)
+	if __r == 0 {
+		return nil, fmt.Errorf("转换数据失败")
+	}
+	return out, nil
+}
+
+func read_files() ([]string, error) {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	__data := __pasteboard.Send(_propertyListForType, _NSPasteboardTypeFiles)
+	if __data == 0 {
+		return nil, fmt.Errorf("读取内容失败")
+	}
+	count := uint(__data.Send(_count))
+	if count == 0 {
+		return nil, fmt.Errorf("没有找到文件")
+	}
+	var files []string
+	for i := 0; i < int(count); i++ {
+		__file := __data.Send(_objectAtIndex, i)
+		utf8_ptr := unsafe.Pointer(__file.Send(_UTF8String))
+		if utf8_ptr == nil {
+			continue
+		}
+		files = append(files, pointer_to_utf8_string(utf8_ptr))
+	}
+	return files, nil
+}
+
+func write_text(text string) error {
+	bytes := []byte(text)
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	if __pasteboard == 0 {
+		return fmt.Errorf("获取粘贴板失败")
+	}
+	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
+	if __data == 0 {
+		return fmt.Errorf("初始化数据失败")
+	}
+	__r := __pasteboard.Send(_clearContents)
+	if __r == 0 {
+		return fmt.Errorf("清空粘贴板失败")
+	}
+	__r2 := __pasteboard.Send(_setDataForType, __data, _NSPasteboardTypeString)
+	if __r2 == 0 {
+		return fmt.Errorf("写入文本失败")
+	}
+	return nil
+}
+
+func write_image(bytes []byte) error {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	if __pasteboard == 0 {
+		return fmt.Errorf("获取粘贴板失败")
+	}
+	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
+	if __data == 0 {
+		return fmt.Errorf("初始化数据失败")
+	}
+	__r := __pasteboard.Send(_clearContents)
+	if __r == 0 {
+		return fmt.Errorf("清空粘贴板失败")
+	}
+	__r2 := __pasteboard.Send(_setDataForType, __data, _NSPasteboardTypePNG)
+	if __r2 == 0 {
+		return fmt.Errorf("写入图片失败")
+	}
+	return nil
+}
+
+func write_files(files []string) error {
+	__arr := objc.ID(_NSMutableArray).Send(_alloc).Send(_init)
+	if __arr == 0 {
+		return fmt.Errorf("初始化失败")
+	}
+	for _, f := range files {
+		file_str := (*int8)(unsafe.Pointer(&[]byte(f + "\x00")[0]))
+		__file_str := objc.ID(_NSString).Send(_stringWithUTF8String, file_str)
+		__file_url := objc.ID(_NSURL).Send(_fileURLWithPath, __file_str)
+		__arr.Send(_addObject, __file_url)
+	}
+
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	if __pasteboard == 0 {
+		return fmt.Errorf("获取粘贴板失败")
+	}
+	__r := __pasteboard.Send(_clearContents)
+	if __r == 0 {
+		return fmt.Errorf("清空粘贴板失败")
+	}
+	__r2 := __pasteboard.Send(_writeObjects, __arr)
+	if __r2 == 0 {
+		return fmt.Errorf("写入文件失败")
+	}
+	__r3 := __pasteboard.Send(_propertyListForType, _NSPasteboardTypeFiles)
+	if __r3 == 0 {
+		return fmt.Errorf("写入文件失败2")
+	}
+	return nil
+}
+
+func clipboard_change_count() int {
+	return int(objc.ID(_NSPasteboard).Send(_generalPasteboard).Send(_changeCount))
+}
+func clipboard_cur_types() []string {
+	__data := objc.ID(_NSPasteboard).Send(_generalPasteboard).Send(_types)
+	__array := objc.ID(__data)
+	count := int(__array.Send(_count))
+	var strs []string
+	for i := 0; i < count; i++ {
+		__file := __array.Send(_objectAtIndex, int(i))
+		utf8_ptr := unsafe.Pointer(__file.Send(_UTF8String))
+		if utf8_ptr == nil {
+			continue
+		}
+		strs = append(strs, pointer_to_utf8_string(utf8_ptr))
+	}
+	return strs
+}
+
+func utf8_str_to_const(s string) *int8 {
+	return (*int8)(unsafe.Pointer(&[]byte(s + "\x00")[0]))
+}
+
+func pointer_to_utf8_string(ptr unsafe.Pointer) string {
 	if ptr == nil {
 		return ""
 	}
@@ -188,104 +373,4 @@ func readUTF8String(ptr unsafe.Pointer) string {
 		bytes[i] = *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(i)))
 	}
 	return string(bytes)
-}
-
-func clipboard_read_files() []byte {
-	var pasteboard = objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	data := pasteboard.Send(sel_propertyListForType, _NSPasteboardTypeFiles)
-	if data == 0 {
-		return nil
-	}
-	array := objc.ID(data)
-	countResult := array.Send(sel_count)
-	count := int(countResult)
-	var strs []string
-	for i := 0; i < count; i++ {
-		fileObj := array.Send(sel_objectAtIndex, int(i))
-		utf8Ptr := unsafe.Pointer(fileObj.Send(sel_UTF8String))
-		if utf8Ptr == nil {
-			continue
-		}
-		fileStr := readUTF8String(utf8Ptr)
-		strs = append(strs, fileStr)
-	}
-
-	// 将字符串切片转换为字节切片
-	var totalLen int
-	for _, str := range strs {
-		totalLen += len(str)
-	}
-	result := make([]byte, totalLen)
-	offset := 0
-	for _, str := range strs {
-		strBytes := []byte(str)
-		copy(result[offset:], strBytes)
-		offset += len(strBytes)
-	}
-	return result
-}
-
-func clipboard_write_image(bytes []byte) bool {
-	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	data := objc.ID(class_NSData).Send(sel_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
-	pasteboard.Send(sel_clearContents)
-	return pasteboard.Send(sel_setDataForType, data, _NSPasteboardTypePNG) != 0
-}
-
-func clipboard_write_string(bytes []byte) bool {
-	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	data := objc.ID(class_NSData).Send(sel_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
-	pasteboard.Send(sel_clearContents)
-	return pasteboard.Send(sel_setDataForType, data, _NSPasteboardTypeString) != 0
-}
-func byte_slice_to_string_slice(b []byte) ([]string, error) {
-	var strs []string
-	err := json.Unmarshal(b, &strs)
-	return strs, err
-}
-func constStringPtr(s string) *int8 {
-	return (*int8)(unsafe.Pointer(&[]byte(s + "\x00")[0]))
-}
-func clipboard_write_files(bytes []byte) bool {
-	files, err := byte_slice_to_string_slice(bytes)
-	if err != nil {
-		return false
-	}
-	// var filePathsPtrs []unsafe.Pointer
-	// for _, path := range files {
-	// 	fmt.Println(path)
-	// 	nsString := objc.ID(class_NSString).Send(sel_stringWithUTF8String, unsafe.Pointer(constStringPtr(path)))
-	// 	filePathsPtrs = append(filePathsPtrs, unsafe.Pointer(nsString))
-	// }
-	// // nsArray := objc.ID(class_NSArray)
-	// pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	// // 清空粘贴板内容
-	// pasteboard.Send(sel_clearContents)
-	// // var nsArrayClass = objc.GetClass("NSArray")
-
-	// nsArray := objc.ID(class_NSArray).Send(sel_arrayWithObjects_count, unsafe.Pointer(&filePathsPtrs[0]), len(filePathsPtrs))
-
-	// // 将文件路径数组设置到粘贴板
-	// return pasteboard.Send(sel_setPropertyList_forType_, nsArray, _NSPasteboardTypeFiles) != 0
-	arr := objc.ID(class_NSMutableArray).Send(sel_alloc).Send(sel_init)
-
-	for _, f := range files {
-		ss2 := (*int8)(unsafe.Pointer(&[]byte(f + "\x00")[0]))
-		v2 := objc.ID(class_NSString).Send(sel_stringWithUTF8String, ss2)
-		url2 := objc.ID(class_NSURL).Send(sel_fileURLWithPath, v2)
-		arr.Send(sel_addObject, url2)
-	}
-
-	the_file_count := uint(arr.Send(sel_count))
-	fmt.Println("the_file_count", the_file_count)
-
-	pasteboard := objc.ID(class_NSPasteboard).Send(sel_generalPasteboard)
-	pasteboard.Send(sel_clearContents)
-
-	pasteboard.Send(sel_writeObjects, arr)
-	return pasteboard.Send(sel_propertyListForType, _NSPasteboardTypeFiles) != 0
-}
-
-func clipboard_change_count() int {
-	return int(objc.ID(class_NSPasteboard).Send(sel_generalPasteboard).Send(sel_changeCount))
 }

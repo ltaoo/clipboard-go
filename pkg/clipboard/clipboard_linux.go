@@ -26,7 +26,6 @@ unsigned long clipboard_read(char* typ, char **out);
 */
 import "C"
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -139,8 +138,8 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	return done, nil
 }
 
-func watch(ctx context.Context, t Format) <-chan []byte {
-	recv := make(chan []byte, 1)
+func watch(ctx context.Context) <-chan ClipboardContent {
+	recv := make(chan ClipboardContent, 1)
 	ti := time.NewTicker(time.Second)
 	last := Read(t)
 	go func() {
@@ -149,15 +148,15 @@ func watch(ctx context.Context, t Format) <-chan []byte {
 			case <-ctx.Done():
 				close(recv)
 				return
-			case <-ti.C:
-				b := Read(t)
-				if b == nil {
-					continue
-				}
-				if !bytes.Equal(last, b) {
-					recv <- b
-					last = b
-				}
+				// case <-ti.C:
+				// 	b := Read(t)
+				// 	if b == nil {
+				// 		continue
+				// 	}
+				// 	if !bytes.Equal(last, b) {
+				// 		recv <- b
+				// 		last = b
+				// 	}
 			}
 		}
 	}()
