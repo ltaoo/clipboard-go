@@ -15,7 +15,7 @@ func main() {
 	}
 	text, err := clipboard.ReadText()
 	if err != nil {
-		fmt.Println("剪贴板中没有文本数据", err.Error())
+		fmt.Println("读取文本失败", err.Error())
 		return
 	}
 	fmt.Printf("粘贴板中的文本\n")

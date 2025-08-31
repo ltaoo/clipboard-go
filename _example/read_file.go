@@ -15,7 +15,7 @@ func main() {
 	}
 	files, err := clipboard.ReadFiles()
 	if err != nil {
-		fmt.Println("读取失败", err.Error())
+		fmt.Println("读取文件失败", err.Error())
 		return
 	}
 	if len(files) == 0 {

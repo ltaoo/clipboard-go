@@ -13,8 +13,8 @@ func main() {
 		return
 	}
 	// files := []string{"/Users/mayfair/Documents/deploy_step4.png", "/Users/mayfair/Documents/StatsCard.tsx"}
-	files := []string{"/Users/litao/Downloads/avatar.png", "/Users/litao/Downloads/face.png"}
-	// files := []string{"/Users/litao/Downloads/flutterio-icon.svg"}
+	// files := []string{"/Users/litao/Downloads/avatar.png", "/Users/litao/Downloads/face.png"}
+	files := []string{"/Users/litao/Downloads/flutterio-icon.svg", "/Users/litao/Downloads/golang.svg"}
 	err = clipboard.WriteFiles(files)
 	if err != nil {
 		fmt.Printf(" %v\n", err)

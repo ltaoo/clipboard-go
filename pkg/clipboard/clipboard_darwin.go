@@ -115,12 +115,12 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	// 	return nil, err_unavailable
 	// }
 	changed := make(chan struct{}, 1)
-	cnt := clipboard_change_count()
+	cnt := get_change_count()
 	go func() {
 		for {
 			// not sure if we are too slow or the user too fast :)
 			time.Sleep(time.Second)
-			cur := clipboard_change_count()
+			cur := get_change_count()
 			if cnt != cur {
 				changed <- struct{}{}
 				close(changed)
@@ -134,7 +134,7 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 func watch(ctx context.Context) <-chan ClipboardContent {
 	recv := make(chan ClipboardContent, 1)
 	ti := time.NewTicker(time.Second)
-	prev_count := clipboard_change_count()
+	prev_count := get_change_count()
 	go func() {
 		for {
 			select {
@@ -142,7 +142,7 @@ func watch(ctx context.Context) <-chan ClipboardContent {
 				close(recv)
 				return
 			case <-ti.C:
-				cur_count := clipboard_change_count()
+				cur_count := get_change_count()
 				if prev_count != cur_count {
 					prev_count = cur_count
 
@@ -156,7 +156,7 @@ func watch(ctx context.Context) <-chan ClipboardContent {
 }
 
 func read_content_with_type() ClipboardContent {
-	cur_types := clipboard_cur_types()
+	cur_types := get_cur_types()
 	var maybe_type string
 	for _, t := range cur_types {
 		if t == "public.utf8-plain-text" {
@@ -338,10 +338,10 @@ func write_files(files []string) error {
 	return nil
 }
 
-func clipboard_change_count() int {
+func get_change_count() int {
 	return int(objc.ID(_NSPasteboard).Send(_generalPasteboard).Send(_changeCount))
 }
-func clipboard_cur_types() []string {
+func get_cur_types() []string {
 	__data := objc.ID(_NSPasteboard).Send(_generalPasteboard).Send(_types)
 	__array := objc.ID(__data)
 	count := int(__array.Send(_count))

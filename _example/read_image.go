@@ -16,7 +16,7 @@ func main() {
 	}
 	data, err := clipboard.ReadImage()
 	if err != nil {
-		fmt.Println("剪贴板中没有图片数据", err.Error())
+		fmt.Println("读取图片失败", err.Error())
 		return
 	}
 	absPath, err := util.SaveByteAsLocalImage(data)

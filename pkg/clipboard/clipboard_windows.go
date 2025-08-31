@@ -1,9 +1,3 @@
-// Copyright 2021 The golang.design Initiative Authors.
-// All rights reserved. Use of this source code is governed
-// by a MIT license that can be found in the LICENSE file.
-//
-// Written by Changkun Ou <changkun.de>
-
 //go:build windows
 
 package clipboard
@@ -16,7 +10,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -32,19 +25,440 @@ import (
 	"golang.org/x/image/bmp"
 )
 
+const (
+	CF_TEXT         = 1
+	CF_BITMAP       = 2
+	cFmtBitmap      = 2 // Win+PrintScreen
+	cFmtDIB         = 8
+	cFmtUnicodeText = 13
+	CF_ENHMETAFILE  = 14
+	CF_HDROP        = 15
+	cFmtFilepaths   = 15
+	cFmtDIBV5       = 17
+	CP_UTF8         = 65001
+	// Screenshot taken from special shortcut is in different format (why??), see:
+	// https://jpsoft.com/forums/threads/detecting-clipboard-format.5225/
+	cFmtDataObject = 49161 // Shift+Win+s, returned from enumClipboardFormats
+
+	gmemMoveable   = 0x0002
+	WM_DROPFILES   = 0x0233
+	DIB_RGB_COLORS = 0x0000
+	BI_RGB         = 0x0000
+
+	fileHeaderLen = 14
+	infoHeaderLen = 40
+)
+
+//	type bitmapHeader struct {
+//		Type       int32
+//		Width      int32
+//		Height     int32
+//		WidthBytes int32
+//		Planes     uint16
+//		BitsPixel  uint16
+//		Bits       interface{}
+//	}
+//
+// DWORD uint32
+// LONG int32
+// WORD uint16
+type bitmap struct {
+	bmType       int32
+	bmWidth      int32
+	bmHeight     int32
+	bmWidthBytes int32
+	bmPlanes     uint16
+	bmBitPixel   uint16
+	bmBits       uintptr
+}
+
+type bitmapHeader struct {
+	Size          uint32
+	Width         uint32
+	Height        uint32
+	PLanes        uint16
+	BitsPixel     uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter uint32
+	YPelsPerMeter uint32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+// BITMAPV5Header structure, see:
+// https://docs.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapv5header
+type bitmapV5Header struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+	RedMask       uint32
+	GreenMask     uint32
+	BlueMask      uint32
+	AlphaMask     uint32
+	CSType        uint32
+	Endpoints     struct {
+		CiexyzRed, CiexyzGreen, CiexyzBlue struct {
+			CiexyzX, CiexyzY, CiexyzZ int32 // FXPT2DOT30
+		}
+	}
+	GammaRed    uint32
+	GammaGreen  uint32
+	GammaBlue   uint32
+	Intent      uint32
+	ProfileData uint32
+	ProfileSize uint32
+	Reserved    uint32
+}
+
+type HDROPHeader struct {
+	pFiles uint32
+	x      int16
+	y      int16
+	fNC    uint32
+	fWide  uint32
+}
+
+// 假设对应的结构体定义
+type BITMAPINFOHEADER struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+type RGBQUAD struct {
+	rgbBlue     uint8
+	rgbGreen    uint8
+	rgbRed      uint8
+	rgbReserved uint8
+}
+
+type BITMAPINFO struct {
+	bmiHeader BITMAPINFOHEADER
+	// bmiHeader BitmapInfo
+	bmiColors [1]RGBQUAD
+}
+
+// 定义POINT结构体
+type POINT struct {
+	x int32
+	y int32
+}
+
+// 定义DROPFILES结构体
+type DROPFILES struct {
+	p_files uint32
+	pt      POINT
+	f_nc    int32
+	f_wide  int32
+}
+
+// Calling a Windows DLL, see:
+// https://github.com/golang/go/wiki/WindowsDLLs
+var (
+	user32 = syscall.MustLoadDLL("user32")
+	// Opens the clipboard for examination and prevents other
+	// applications from modifying the clipboard content.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard
+	_openClipboard = user32.MustFindProc("OpenClipboard")
+	// Closes the clipboard.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closeclipboard
+	closeClipboard = user32.MustFindProc("CloseClipboard")
+	// Empties the clipboard and frees handles to data in the clipboard.
+	// The function then assigns ownership of the clipboard to the
+	// window that currently has the clipboard open.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-emptyclipboard
+	emptyClipboard = user32.MustFindProc("EmptyClipboard")
+	// Retrieves data from the clipboard in a specified format.
+	// The clipboard must have been opened previously.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboarddata
+	getClipboardData = user32.MustFindProc("GetClipboardData")
+	// Places data on the clipboard in a specified clipboard format.
+	// The window must be the current clipboard owner, and the
+	// application must have called the OpenClipboard function. (When
+	// responding to the WM_RENDERFORMAT message, the clipboard owner
+	// must not call OpenClipboard before calling SetClipboardData.)
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setclipboarddata
+	setClipboardData = user32.MustFindProc("SetClipboardData")
+	// Determines whether the clipboard contains data in the specified format.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-isclipboardformatavailable
+	isClipboardFormatAvailable = user32.MustFindProc("IsClipboardFormatAvailable")
+	// Clipboard data formats are stored in an ordered list. To perform
+	// an enumeration of clipboard data formats, you make a series of
+	// calls to the EnumClipboardFormats function. For each call, the
+	// format parameter specifies an available clipboard format, and the
+	// function returns the next available clipboard format.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-isclipboardformatavailable
+	enumClipboardFormats = user32.MustFindProc("EnumClipboardFormats")
+	// Retrieves the clipboard sequence number for the current window station.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboardsequencenumber
+	getClipboardSequenceNumber = user32.MustFindProc("GetClipboardSequenceNumber")
+	// Registers a new clipboard format. This format can then be used as
+	// a valid clipboard format.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
+	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
+	// lstrcpyW                 = user32.MustFindProc("lstrcpyW")
+	getDC     = user32.MustFindProc("GetDC")
+	releaseDC = user32.MustFindProc("ReleaseDC")
+
+	libgdi32   = syscall.NewLazyDLL("gdi32")
+	getDIBits  = libgdi32.NewProc("GetDIBits")
+	getObjectW = libgdi32.NewProc("GetObjectW")
+
+	shell32       = syscall.NewLazyDLL("shell32")
+	dragQueryFile = shell32.NewProc("DragQueryFileW")
+
+	kernel32 = syscall.NewLazyDLL("kernel32")
+
+	// Locks a global memory object and returns a pointer to the first
+	// byte of the object's memory block.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globallock
+	gLock               = kernel32.NewProc("GlobalLock")
+	gSize               = kernel32.NewProc("GlobalSize")
+	multiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
+	// Decrements the lock count associated with a memory object that was
+	// allocated with GMEM_MOVEABLE. This function has no effect on memory
+	// objects allocated with GMEM_FIXED.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalunlock
+	gUnlock = kernel32.NewProc("GlobalUnlock")
+	// Allocates the specified number of bytes from the heap.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalalloc
+	gAlloc = kernel32.NewProc("GlobalAlloc")
+	// Frees the specified global memory object and invalidates its handle.
+	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalfree
+	gFree   = kernel32.NewProc("GlobalFree")
+	memMove = kernel32.NewProc("RtlMoveMemory")
+)
+
 func initialize() error { return nil }
 
-// readText reads the clipboard and returns the text data if presents.
+func read(t Format) (buf []byte, err error) {
+	// On Windows, OpenClipboard and CloseClipboard must be executed on
+	// the same thread. Thus, lock the OS thread for further execution.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var format uintptr
+	switch t {
+	// case FmtImage:
+	// 	format = cFmtDIBV5
+	// case FmtFilepath:
+	// 	format = cFmtFilepaths
+	// case FmtText:
+	// 	fallthrough
+	// default:
+	// 	format = cFmtUnicodeText
+	}
+
+	// check if clipboard is avaliable for the requested format
+	r, _, err := isClipboardFormatAvailable.Call(format)
+	if r == 0 {
+		return nil, err_unavailable
+	}
+
+	// try again until open clipboard successed
+	for {
+		r, _, _ = _openClipboard.Call()
+		if r == 0 {
+			continue
+		}
+		break
+	}
+	defer closeClipboard.Call()
+
+	switch format {
+	// case cFmtDIBV5:
+	// 	return readImage()
+	// case cFmtFilepaths:
+	// 	return readFilepaths()
+	// case cFmtUnicodeText:
+	// 	fallthrough
+	// default:
+	// 	return readText()
+	}
+	return nil, nil
+}
+
+// write writes the given data to clipboard and
+// returns true if success or false if failed.
+func write(t Format, buf []byte) (<-chan struct{}, error) {
+	errch := make(chan error)
+	changed := make(chan struct{}, 1)
+	go func() {
+		// make sure GetClipboardSequenceNumber happens with
+		// OpenClipboard on the same thread.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		for {
+			r, _, _ := _openClipboard.Call(0)
+			if r == 0 {
+				continue
+			}
+			break
+		}
+
+		// var param uintptr
+		switch t {
+		// case FmtImage:
+		// 	err := write_image(buf)
+		// 	if err != nil {
+		// 		errch <- err
+		// 		closeClipboard.Call()
+		// 		return
+		// 	}
+		// case FmtFilepath:
+		// 	err := write_files(buf)
+		// 	if err != nil {
+		// 		errch <- err
+		// 		closeClipboard.Call()
+		// 		return
+		// 	}
+		// case FmtText:
+		// 	fallthrough
+		// default:
+		// 	// param = cFmtUnicodeText
+		// 	err := write_text(buf)
+		// 	if err != nil {
+		// 		errch <- err
+		// 		closeClipboard.Call()
+		// 		return
+		// 	}
+		}
+		// Close the clipboard otherwise other applications cannot
+		// paste the data.
+		closeClipboard.Call()
+
+		cnt, _, _ := getClipboardSequenceNumber.Call()
+		errch <- nil
+		for {
+			time.Sleep(time.Second)
+			cur, _, _ := getClipboardSequenceNumber.Call()
+			if cur != cnt {
+				changed <- struct{}{}
+				close(changed)
+				return
+			}
+		}
+	}()
+	err := <-errch
+	if err != nil {
+		return nil, err
+	}
+	return changed, nil
+}
+
+func watch(ctx context.Context) <-chan ClipboardContent {
+	recv := make(chan ClipboardContent, 1)
+	ready := make(chan struct{})
+	go func() {
+		// not sure if we are too slow or the user too fast :)
+		ti := time.NewTicker(time.Second)
+		prev_count, _, _ := getClipboardSequenceNumber.Call()
+		ready <- struct{}{}
+		for {
+			select {
+			case <-ctx.Done():
+				close(recv)
+				return
+			case <-ti.C:
+				cur_count, _, _ := getClipboardSequenceNumber.Call()
+				if prev_count != cur_count {
+					prev_count = cur_count
+					content := read_content_with_type()
+					recv <- content
+				}
+			}
+		}
+	}()
+	<-ready
+	return recv
+}
+
+func read_content_with_type() ClipboardContent {
+	open_clipboard()
+	defer close_clipboard()
+	cur_types := get_cur_types()
+	var maybe_type string
+	for _, t := range cur_types {
+		if t == "public.utf8-plain-text" {
+			maybe_type = t
+			b, err := read_text()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+		if t == "public.file-url" {
+			maybe_type = t
+			b, err := read_files()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+		if t == "public.png" {
+			maybe_type = t
+			b, err := read_image()
+			d := ClipboardContent{
+				Type:  maybe_type,
+				Data:  b,
+				Error: nil,
+			}
+			if err != nil {
+				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
+			}
+			return d
+		}
+	}
+	type_text := strings.Join(cur_types, "\n")
+	return ClipboardContent{
+		Type:  type_text,
+		Data:  []byte{},
+		Error: fmt.Errorf("无法处理的内容类型"),
+	}
+}
+
+// read_text reads the clipboard and returns the text data if presents.
 // The caller is responsible for opening/closing the clipboard before
 // calling this function.
-func readText() (buf []byte, err error) {
+func read_text() (text string, err error) {
+	open_clipboard()
+	defer close_clipboard()
 	hMem, _, err := getClipboardData.Call(cFmtUnicodeText)
 	if hMem == 0 {
-		return nil, err
+		return "", err
 	}
 	p, _, err := gLock.Call(hMem)
 	if p == 0 {
-		return nil, err
+		return "", err
 	}
 	defer gUnlock.Call(hMem)
 
@@ -59,24 +473,321 @@ func readText() (buf []byte, err error) {
 	h.Data = p
 	h.Len = n
 	h.Cap = n
-	return []byte(string(utf16.Decode(s))), nil
+	return string(utf16.Decode(s)), nil
 }
 
-// writeText writes given data to the clipboard. It is the caller's
+func read_image() ([]byte, error) {
+	open_clipboard()
+	defer close_clipboard()
+	hMem, _, err := getClipboardData.Call(cFmtBitmap)
+	if hMem == 0 {
+		return nil, fmt.Errorf("找不到数据")
+	}
+	// p, _, err := gLock.Call(hMem)
+	// if p == 0 {
+	// 	return nil, fmt.Errorf("锁定内存失败，%v", err.Error())
+	// }
+	// defer gUnlock.Call(hMem)
+	p := hMem
+
+	var bitmap bitmap
+	r, _, err := getObjectW.Call(uintptr(p), uintptr(unsafe.Sizeof(bitmap)), uintptr(unsafe.Pointer(&bitmap)))
+	fmt.Println("the result getObjectW", r, err.Error(), bitmap.bmPlanes, bitmap.bmBitPixel)
+	if r == 0 {
+		return nil, fmt.Errorf("获取图片信息失败，%v", err.Error())
+	}
+
+	clr_bits := int(bitmap.bmPlanes) * int(bitmap.bmBitPixel)
+	fmt.Println("the clr_bits", clr_bits)
+
+	header_storage_size := uintptr(unsafe.Sizeof(BITMAPINFOHEADER{}))
+	if clr_bits <= 24 {
+		header_storage_size = uintptr(unsafe.Sizeof(BITMAPINFOHEADER{})) + uintptr(unsafe.Sizeof(RGBQUAD{}))*(1<<uintptr(clr_bits))
+	}
+	header_storage := make([]byte, header_storage_size)
+	info := (*BITMAPINFO)(unsafe.Pointer(&header_storage[0]))
+
+	info.bmiHeader.Size = uint32(unsafe.Sizeof(BITMAPINFOHEADER{}))
+	info.bmiHeader.Width = bitmap.bmWidth
+	info.bmiHeader.Height = bitmap.bmHeight
+	info.bmiHeader.Planes = bitmap.bmPlanes
+	info.bmiHeader.BitCount = bitmap.bmBitPixel
+	info.bmiHeader.Compression = BI_RGB
+	if clr_bits <= 24 {
+		info.bmiHeader.ClrUsed = 1 << uint32(clr_bits)
+	}
+	info.bmiHeader.SizeImage = uint32((((info.bmiHeader.Width*int32(clr_bits) + 31) &^ 31) / 8) * info.bmiHeader.Height)
+	info.bmiHeader.ClrImportant = 0
+
+	header := &info.bmiHeader
+	// header.SizeImage = ((header.Width*int32(clr_bits) + 31) / 8) * uint32(header.Height)
+	// header := (*bitmapHeader)(unsafe.Pointer(p))
+
+	// fmt.Println("the header", header.BitCount, header.Width, header.PLanes, header.BitsPixel, header.PLanes*header.BitsPixel)
+	// img_size := int(info.bmiHeader.SizeImage)
+	img_size := int(header.SizeImage)
+	buffer := make([]byte, img_size)
+
+	// data := make([]byte, header.SizeImage)
+	hdc, _, err := getDC.Call(0)
+	if hdc == 0 {
+		return nil, fmt.Errorf("GetDC failed: %v", err)
+	}
+	defer func() {
+		r, _, err := releaseDC.Call(0, hdc)
+		if r == 0 {
+			fmt.Printf("ReleaseDC failed: %v\n", err)
+		}
+	}()
+	_, _, err = getDIBits.Call(
+		hdc,
+		p,
+		0,
+		// uintptr(bitmap.bmHeight),
+		uintptr(header.Height),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(unsafe.Pointer(info)),
+		DIB_RGB_COLORS)
+	if err.Error() != "The operation completed successfully." {
+		return nil, fmt.Errorf("GetDIBits failed: %v", err)
+	}
+	fmt.Println("the data read using GetDIBits", len(buffer), header.Size)
+	// sh := unsafe.SliceData(data)
+	// *(*uintptr)(unsafe.Pointer(&sh)) = p
+	// var length int
+	// // var capacity int
+	// if header.BitCount == 32 {
+	// 	// capacity = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
+	// 	length = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
+	// } else if header.BitCount == 24 {
+	// 	// capacity = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
+	// 	length = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
+	// } else {
+	// 	return nil, err_unsupported
+	// }
+	// data = unsafe.Slice((*byte)(unsafe.Pointer(sh)), length)
+	// fmt.Println(data)
+	// header := info.bmiHeader
+	img := image.NewRGBA(image.Rect(0, 0, int(header.Width), int(header.Height)))
+
+	// offset := int(header.Size)
+	offset := 0
+	stride := int(header.Width)
+	for y := 0; y < int(header.Height); y++ {
+		for x := 0; x < int(header.Width); x++ {
+			idx := offset + 4*(y*stride+x)
+			// 移除水平方向的取模操作，直接使用原坐标
+			// xhat := x
+			// yhat := int(info.Height) - 1 - y
+			xhat := (x + int(header.Width)) % int(header.Width)
+			yhat := int(header.Height) - 1 - y
+			r := buffer[idx+2]
+			g := buffer[idx+1]
+			b := buffer[idx+0]
+			a := uint8(0xff)
+			// a := data[idx+3]
+			img.SetRGBA(xhat, yhat, color.RGBA{r, g, b, a})
+		}
+	}
+	var buf bytes.Buffer
+	png.Encode(&buf, img)
+	return buf.Bytes(), nil
+}
+
+// read_image reads the clipboard and returns PNG encoded image data
+// if presents. The caller is responsible for opening/closing the
+// clipboard before calling this function.
+// func read_image() ([]byte, error) {
+// 	open_clipboard()
+// 	defer close_clipboard()
+// 	// r, _, err := isClipboardFormatAvailable.Call(cFmtBitmap)
+// 	hMem, _, err := getClipboardData.Call(cFmtDIBV5)
+// 	// hMem, _, err := getClipboardData.Call(cFmtBitmap)
+// 	// fmt.Println("[]read_image after getClipboardData.Call(cFmtDIBV5)", hMem)
+// 	if hMem == 0 {
+// 		// second chance to try FmtDIB
+// 		return read_image_dib()
+// 	}
+// 	p, _, err := gLock.Call(hMem)
+// 	if p == 0 {
+// 		return nil, err
+// 	}
+// 	defer gUnlock.Call(hMem)
+
+// 	header := (*bitmapV5Header)(unsafe.Pointer(p))
+
+// 	var data []byte
+// 	sh := unsafe.SliceData(data)
+// 	*(*uintptr)(unsafe.Pointer(&sh)) = p
+// 	var length int
+// 	// var capacity int
+// 	if header.BitCount == 32 {
+// 		// capacity = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
+// 		length = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
+// 	} else if header.BitCount == 24 {
+// 		// capacity = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
+// 		length = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
+// 	} else {
+// 		return nil, err_unsupported
+// 	}
+// 	data = unsafe.Slice((*byte)(unsafe.Pointer(sh)), length)
+// 	fmt.Println(len(data), header.Size)
+
+// 	img := image.NewRGBA(image.Rect(0, 0, int(header.Width), int(header.Height)))
+// 	if header.BitCount == 32 {
+// 		offset := int(header.Size)
+// 		stride := int(header.Width)
+// 		for y := 0; y < int(header.Height); y++ {
+// 			for x := 0; x < int(header.Width); x++ {
+// 				idx := offset + 4*(y*stride+x)
+// 				// 移除水平方向的取模操作，直接使用原坐标
+// 				// xhat := x
+// 				// yhat := int(info.Height) - 1 - y
+// 				xhat := (x + int(header.Width)) % int(header.Width)
+// 				yhat := int(header.Height) - 1 - y
+// 				r := data[idx+2]
+// 				g := data[idx+1]
+// 				b := data[idx+0]
+// 				a := data[idx+3]
+// 				img.SetRGBA(xhat, yhat, color.RGBA{r, g, b, a})
+// 			}
+// 		}
+// 	} else if header.BitCount == 24 {
+// 		offset := int(header.Size)
+// 		stride := int(header.Width)
+// 		for y := 0; y < int(header.Height); y++ {
+// 			for x := 0; x < int(header.Width); x++ {
+// 				idx := offset + 3*(y*stride+x)
+// 				// 移除水平方向的取模操作，直接使用原坐标
+// 				// xhat := x
+// 				// yhat := int(info.Height) - 1 - y
+// 				xhat := (x + int(header.Width)) % int(header.Width)
+// 				yhat := int(header.Height) - 1 - y
+// 				// 调整颜色分量顺序，从 BGR 转换为 RGB
+// 				r := data[idx+2]
+// 				g := data[idx+1]
+// 				b := data[idx+0]
+// 				// 24 位位图无透明度，设为不透明
+// 				a := uint8(0xff)
+// 				img.SetRGBA(xhat, yhat, color.RGBA{r, g, b, a})
+// 			}
+// 		}
+// 	}
+
+// 	// always use PNG encoding.
+// 	var buf bytes.Buffer
+// 	png.Encode(&buf, img)
+// 	return buf.Bytes(), nil
+// }
+
+func read_image_dib() ([]byte, error) {
+	open_clipboard()
+	defer close_clipboard()
+	hMem, _, _ := getClipboardData.Call(cFmtDIB)
+	if hMem != 0 {
+		return nil, fmt.Errorf("not dib format data")
+	}
+	p, _, err := gLock.Call(hMem)
+	if p == 0 {
+		return nil, fmt.Errorf("failed to call global lock, %v", err.Error())
+	}
+	defer gUnlock.Call(hMem)
+
+	bmpHeader := (*bitmapHeader)(unsafe.Pointer(p))
+	dataSize := bmpHeader.SizeImage + fileHeaderLen + infoHeaderLen
+
+	if bmpHeader.SizeImage == 0 && bmpHeader.Compression == 0 {
+		iSizeImage := bmpHeader.Height * ((bmpHeader.Width*uint32(bmpHeader.BitCount)/8 + 3) &^ 3)
+		dataSize += iSizeImage
+	}
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, uint16('B')|(uint16('M')<<8))
+	binary.Write(buf, binary.LittleEndian, uint32(dataSize))
+	binary.Write(buf, binary.LittleEndian, uint32(0))
+	const sizeof_colorbar = 0
+	binary.Write(buf, binary.LittleEndian, uint32(fileHeaderLen+infoHeaderLen+sizeof_colorbar))
+	j := 0
+	for i := fileHeaderLen; i < int(dataSize); i++ {
+		binary.Write(buf, binary.BigEndian, *(*byte)(unsafe.Pointer(p + uintptr(j))))
+		j++
+	}
+	return bmp_to_png(buf)
+}
+
+// https://stackoverflow.com/questions/77205618/when-a-file-is-on-the-windows-clipboard-how-can-i-in-python-access-its-path
+func read_files() ([]string, error) {
+	open_clipboard()
+	defer close_clipboard()
+	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
+	if hMem == 0 {
+		fmt.Println("f1", err.Error())
+		return nil, err
+	}
+	p, _, err := gLock.Call(hMem)
+	if p == 0 {
+		fmt.Println("f2", err.Error())
+		return nil, err
+	}
+	defer gUnlock.Call(hMem)
+
+	// 验证HDROP结构的内存布局
+	type HDROPHeader struct {
+		pFiles uint32
+		x      int16
+		y      int16
+		fNC    uint32
+		fWide  uint32
+	}
+
+	var count uint32
+	ret, _, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
+	if ret == 0 {
+		// fmt.Println("f3", err.Error())
+		return nil, fmt.Errorf("DragQueryFile (to get count) failed: %w", err)
+	}
+
+	// fmt.Println("num files", ret, v, err)
+	fileCount := uint32(ret)
+
+	// // 存储文件路径
+	filePaths := make([]string, fileCount)
+	for i := uint32(0); i < fileCount; i++ {
+		// 获取文件路径所需长度（不包含 null 终止符）
+		var length uint32
+		ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
+		if ret == 0 {
+			return nil, fmt.Errorf("DragQueryFile (to get length) for file %d failed: %w", i, err)
+		}
+		length = uint32(ret)
+
+		buffer := make([]uint16, length+1)
+		ret, _, err = dragQueryFile.Call(p, uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2))
+		if ret == 0 {
+			return nil, fmt.Errorf("DragQueryFile (to get path) for file %d failed: %w", i, err)
+		}
+
+		filePaths = append(filePaths, syscall.UTF16ToString(buffer[:length]))
+	}
+	return filePaths, nil
+	// joinedPaths := strings.Join(filePaths, "\n")
+	// return []byte(joinedPaths), nil
+}
+
+// write_text writes given data to the clipboard. It is the caller's
 // responsibility for opening/closing the clipboard before calling
 // this function.
-func writeText(buf []byte) error {
+func write_text(text string) error {
+	open_clipboard()
+	defer close_clipboard()
 	r, _, err := emptyClipboard.Call()
 	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
-
 	// empty text, we are done here.
-	if len(buf) == 0 {
-		return nil
-	}
-
-	s, err := syscall.UTF16FromString(string(buf))
+	// if len(buf) == 0 {
+	// 	return nil
+	// }
+	s, err := syscall.UTF16FromString(text)
 	if err != nil {
 		return fmt.Errorf("failed to convert given string: %w", err)
 	}
@@ -105,107 +816,9 @@ func writeText(buf []byte) error {
 	return nil
 }
 
-// readImage reads the clipboard and returns PNG encoded image data
-// if presents. The caller is responsible for opening/closing the
-// clipboard before calling this function.
-func readImage() ([]byte, error) {
-	hMem, _, err := getClipboardData.Call(cFmtDIBV5)
-	if hMem == 0 {
-		// second chance to try FmtDIB
-		return readImageDib()
-	}
-	p, _, err := gLock.Call(hMem)
-	if p == 0 {
-		return nil, err
-	}
-	defer gUnlock.Call(hMem)
-
-	// inspect header information
-	info := (*bitmapV5Header)(unsafe.Pointer(p))
-
-	// maybe deal with other formats?
-	if info.BitCount != 32 {
-		return nil, err_unsupported
-	}
-
-	var data []byte
-	sh := (*reflect.SliceHeader)(unsafe.Pointer(&data))
-	sh.Data = uintptr(p)
-	sh.Cap = int(info.Size + 4*uint32(info.Width)*uint32(info.Height))
-	sh.Len = int(info.Size + 4*uint32(info.Width)*uint32(info.Height))
-	img := image.NewRGBA(image.Rect(0, 0, int(info.Width), int(info.Height)))
-	offset := int(info.Size)
-	stride := int(info.Width)
-	for y := 0; y < int(info.Height); y++ {
-		for x := 0; x < int(info.Width); x++ {
-			idx := offset + 4*(y*stride+x)
-			xhat := (x + int(info.Width)) % int(info.Width)
-			yhat := int(info.Height) - 1 - y
-			r := data[idx+2]
-			g := data[idx+1]
-			b := data[idx+0]
-			a := data[idx+3]
-			img.SetRGBA(xhat, yhat, color.RGBA{r, g, b, a})
-		}
-	}
-	// always use PNG encoding.
-	var buf bytes.Buffer
-	png.Encode(&buf, img)
-	return buf.Bytes(), nil
-}
-
-func readImageDib() ([]byte, error) {
-	const (
-		fileHeaderLen = 14
-		infoHeaderLen = 40
-		cFmtDIB       = 8
-	)
-
-	hClipDat, _, err := getClipboardData.Call(cFmtDIB)
-	if err != nil {
-		return nil, errors.New("not dib format data: " + err.Error())
-	}
-	pMemBlk, _, err := gLock.Call(hClipDat)
-	if pMemBlk == 0 {
-		return nil, errors.New("failed to call global lock: " + err.Error())
-	}
-	defer gUnlock.Call(hClipDat)
-
-	bmpHeader := (*bitmapHeader)(unsafe.Pointer(pMemBlk))
-	dataSize := bmpHeader.SizeImage + fileHeaderLen + infoHeaderLen
-
-	if bmpHeader.SizeImage == 0 && bmpHeader.Compression == 0 {
-		iSizeImage := bmpHeader.Height * ((bmpHeader.Width*uint32(bmpHeader.BitCount)/8 + 3) &^ 3)
-		dataSize += iSizeImage
-	}
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, uint16('B')|(uint16('M')<<8))
-	binary.Write(buf, binary.LittleEndian, uint32(dataSize))
-	binary.Write(buf, binary.LittleEndian, uint32(0))
-	const sizeof_colorbar = 0
-	binary.Write(buf, binary.LittleEndian, uint32(fileHeaderLen+infoHeaderLen+sizeof_colorbar))
-	j := 0
-	for i := fileHeaderLen; i < int(dataSize); i++ {
-		binary.Write(buf, binary.BigEndian, *(*byte)(unsafe.Pointer(pMemBlk + uintptr(j))))
-		j++
-	}
-	return bmpToPng(buf)
-}
-
-func bmpToPng(bmpBuf *bytes.Buffer) (buf []byte, err error) {
-	var f bytes.Buffer
-	original_image, err := bmp.Decode(bmpBuf)
-	if err != nil {
-		return nil, err
-	}
-	err = png.Encode(&f, original_image)
-	if err != nil {
-		return nil, err
-	}
-	return f.Bytes(), nil
-}
-
-func writeImage(buf []byte) error {
+func write_image(buf []byte) error {
+	open_clipboard()
+	defer close_clipboard()
 	r, _, err := emptyClipboard.Call()
 	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
@@ -224,9 +837,9 @@ func writeImage(buf []byte) error {
 	offset := unsafe.Sizeof(bitmapV5Header{})
 	width := img.Bounds().Dx()
 	height := img.Bounds().Dy()
-	imageSize := 4 * width * height
+	image_size := 4 * width * height
 
-	data := make([]byte, int(offset)+imageSize)
+	data := make([]byte, int(offset)+image_size)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			idx := int(offset) + 4*(y*width+x)
@@ -296,41 +909,16 @@ func writeImage(buf []byte) error {
 	return nil
 }
 
-func byte_slice_to_string_slice(b []byte) ([]string, error) {
-	var strs []string
-	err := json.Unmarshal(b, &strs)
-	return strs, err
-}
-
-type HDROPHeader struct {
-	pFiles uint32
-	x      int16
-	y      int16
-	fNC    uint32
-	fWide  uint32
-}
-
-func writeFiles(buf []byte) error {
+func write_files(files []string) error {
+	open_clipboard()
+	defer close_clipboard()
 	ret, _, err := emptyClipboard.Call()
 	if ret == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
 
-	// empty text, we are done here.
-	if len(buf) == 0 {
-		return nil
-	}
-	filePaths, err := byte_slice_to_string_slice(buf)
-	if err != nil {
-		return err
-	}
-	if len(filePaths) == 0 {
-		return nil
-	}
-
-	// 计算文件路径的总长度
 	var fileListSize uint32
-	for _, path := range filePaths {
+	for _, path := range files {
 		var count uint32
 		ret, _, err := multiByteToWideChar.Call(
 			CP_UTF8,
@@ -380,7 +968,7 @@ func writeFiles(buf []byte) error {
 
 	// 填充文件路径
 	dataPtr := (*[1 << 30]uint16)(unsafe.Pointer(uintptr(p) + unsafe.Sizeof(dropfiles)))
-	for _, path := range filePaths {
+	for _, path := range files {
 		var count uint32
 		ret, _, err := multiByteToWideChar.Call(
 			CP_UTF8,
@@ -407,514 +995,58 @@ func writeFiles(buf []byte) error {
 		return fmt.Errorf("SetClipboardData failed: %w", err)
 	}
 	return nil
-
-	// // 计算总的路径长度和HDROPHeader的大小
-	// totalLength := uint32(unsafe.Sizeof(HDROPHeader{}))
-	// for _, path := range filePaths {
-	// 	fmt.Println("the file prepare write to clipboard", path)
-	// 	totalLength += uint32(len(path)+1) * 2 // 每个字符2字节（UTF - 16），加上null终止符
-	// }
-
-	// // 分配全局内存
-	// hMem, _, err := gAlloc.Call(0x0042, uintptr(totalLength))
-	// if hMem == 0 {
-	// 	fmt.Println("e1", err.Error())
-	// 	return fmt.Errorf("GlobalAlloc failed: %w", err)
-	// }
-	// defer gFree.Call(hMem)
-
-	// // 锁定内存
-	// p, _, err := gLock.Call(hMem)
-	// if p == 0 {
-	// 	fmt.Println("e2", err.Error())
-	// 	return fmt.Errorf("GlobalLock failed: %w", err)
-	// }
-	// defer gUnlock.Call(hMem)
-
-	// // 填充HDROPHeader
-	// hdr := (*HDROPHeader)(unsafe.Pointer(p))
-	// hdr.pFiles = uint32(len(filePaths))
-	// hdr.x = 0
-	// hdr.y = 0
-	// hdr.fNC = 0
-	// hdr.fWide = 1
-
-	// offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
-	// for _, path := range filePaths {
-	// 	utf16Path, err := syscall.UTF16FromString(path)
-	// 	if err != nil {
-	// 		fmt.Println("e3", err.Error())
-	// 		return fmt.Errorf("UTF16FromString failed: %w", err)
-	// 	}
-	// 	// 手动复制UTF - 16字符串到内存
-	// 	dst := (*[1 << 30]uint16)(unsafe.Pointer(p + offset))
-	// 	for i, v := range utf16Path {
-	// 		dst[i] = v
-	// 	}
-	// 	// 添加null终止符
-	// 	dst[len(utf16Path)] = 0
-	// 	offset += uintptr((len(utf16Path)+1) * 2)
-	// }
-
-	// // 设置剪贴板数据
-	// r, _, err = setClipboardData.Call(cFmtFilepaths, hMem)
-	// fmt.Println("after setClipboardData", r, err.Error())
-	// if r == 0 {
-	// 	return fmt.Errorf("SetClipboardData failed: %w", err)
-	// }
-	// return nil
-
-	// 填充文件路径
-	// offset := uintptr(unsafe.Sizeof(HDROPHeader{}))
-	// for _, path := range filePaths {
-	// 	utf16Path, err := syscall.UTF16FromString(path)
-	// 	if err != nil {
-	// 		return fmt.Errorf("UTF16FromString failed: %w", err)
-	// 	}
-	// 	_, _, err = lstrcpyW.Call(p+offset, uintptr(unsafe.Pointer(&utf16Path[0])))
-	// 	if err != nil {
-	// 		return fmt.Errorf("lstrcpyW failed: %w", err)
-	// 	}
-	// 	offset += uintptr((len(utf16Path) + 1) * 2)
-	// }
-
-	// // 设置剪贴板数据
-	// ret, _, err := setClipboardData.Call(cFmtFilepaths, hMem)
-	// if ret == 0 {
-	// 	return fmt.Errorf("SetClipboardData failed: %w", err)
-	// }
-
-	// return nil
-
-	// infob := make([]byte, int(unsafe.Sizeof(info)))
-	// for i, v := range *(*[unsafe.Sizeof(info)]byte)(unsafe.Pointer(&info)) {
-	// 	infob[i] = v
-	// }
-	// copy(data[:], infob[:])
-
-	// hMem, _, err := gAlloc.Call(gmemMoveable,
-	// 	uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
-	// if hMem == 0 {
-	// 	return fmt.Errorf("failed to alloc global memory: %w", err)
-	// }
-
-	// p, _, err := gLock.Call(hMem)
-	// if p == 0 {
-	// 	return fmt.Errorf("failed to lock global memory: %w", err)
-	// }
-	// defer gUnlock.Call(hMem)
-
-	// memMove.Call(p, uintptr(unsafe.Pointer(&data[0])),
-	// 	uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
-
-	// v, _, err := setClipboardData.Call(cFmtFilepaths, hMem)
-	// if v == 0 {
-	// 	gFree.Call(hMem)
-	// 	return fmt.Errorf("failed to set files to clipboard: %w", err)
-	// }
-
-	// return nil
 }
 
-// https://stackoverflow.com/questions/77205618/when-a-file-is-on-the-windows-clipboard-how-can-i-in-python-access-its-path
-
-func readFilepaths() ([]byte, error) {
-	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
-	if hMem == 0 {
-		fmt.Println("f1", err.Error())
-		return nil, err
-	}
-	p, _, err := gLock.Call(hMem)
-	if p == 0 {
-		fmt.Println("f2", err.Error())
-		return nil, err
-	}
-	defer gUnlock.Call(hMem)
-
-	// 验证HDROP结构的内存布局
-	type HDROPHeader struct {
-		pFiles uint32
-		x      int16
-		y      int16
-		fNC    uint32
-		fWide  uint32
-	}
-
-	var count uint32
-	ret, v, err := dragQueryFile.Call(p, uintptr(^uint32(0)), 0, 0, uintptr(unsafe.Sizeof(count)), uintptr(unsafe.Pointer(&count)))
-	if ret == 0 {
-		fmt.Println("f3", err.Error())
-		return nil, fmt.Errorf("DragQueryFile (to get count) failed: %w", err)
-	}
-
-	fmt.Println("num files", ret, v, err)
-	fileCount := uint32(ret)
-
-	// // 存储文件路径
-	filePaths := make([]string, fileCount)
-	for i := uint32(0); i < fileCount; i++ {
-		// 获取文件路径所需长度（不包含 null 终止符）
-		var length uint32
-		ret, _, err = dragQueryFile.Call(p, uintptr(i), 0, 0, uintptr(unsafe.Sizeof(length)), uintptr(unsafe.Pointer(&length)))
-		if ret == 0 {
-			return nil, fmt.Errorf("DragQueryFile (to get length) for file %d failed: %w", i, err)
-		}
-		length = uint32(ret)
-
-		buffer := make([]uint16, length+1)
-		ret, _, err = dragQueryFile.Call(p, uintptr(i), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2))
-		if ret == 0 {
-			return nil, fmt.Errorf("DragQueryFile (to get path) for file %d failed: %w", i, err)
-		}
-
-		filePaths = append(filePaths, syscall.UTF16ToString(buffer[:length]))
-	}
-	joinedPaths := strings.Join(filePaths, "\n")
-	return []byte(joinedPaths), nil
+func get_change_count() uintptr {
+	cnt, _, _ := getClipboardSequenceNumber.Call()
+	return cnt
 }
-
-func read(t Format) (buf []byte, err error) {
-	// On Windows, OpenClipboard and CloseClipboard must be executed on
-	// the same thread. Thus, lock the OS thread for further execution.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	var format uintptr
-	switch t {
-	case FmtImage:
-		format = cFmtDIBV5
-	case FmtFilepath:
-		format = cFmtFilepaths
-	case FmtText:
-		fallthrough
-	default:
-		format = cFmtUnicodeText
-	}
-
-	// check if clipboard is avaliable for the requested format
-	r, _, err := isClipboardFormatAvailable.Call(format)
-	fmt.Println("after check clipboard ", r, format)
-	if r == 0 {
-		return nil, err_unavailable
-	}
-
-	// try again until open clipboard successed
+func get_cur_types() []string {
+	format := 1
+	var types []string
 	for {
-		r, _, _ = openClipboard.Call()
+		one_type, _, err := enumClipboardFormats.Call(uintptr(format))
+		fmt.Println("cur type", one_type, uint(one_type))
+		if one_type == 0 {
+			if err.Error() != "The operation completed successfully." {
+				fmt.Println("EnumClipboardFormats error:", err)
+			}
+			break
+		}
+		if one_type == 7 {
+			types = append(types, "public.utf8-plain-text")
+		}
+	}
+	return types
+}
+func open_clipboard() {
+	for {
+		r, _, _ := _openClipboard.Call()
 		if r == 0 {
 			continue
 		}
 		break
 	}
-	defer closeClipboard.Call()
-
-	switch format {
-	case cFmtDIBV5:
-		return readImage()
-	case cFmtFilepaths:
-		return readFilepaths()
-	case cFmtUnicodeText:
-		fallthrough
-	default:
-		return readText()
-	}
+}
+func close_clipboard() {
+	closeClipboard.Call()
 }
 
-// write writes the given data to clipboard and
-// returns true if success or false if failed.
-func write(t Format, buf []byte) (<-chan struct{}, error) {
-	errch := make(chan error)
-	changed := make(chan struct{}, 1)
-	go func() {
-		// make sure GetClipboardSequenceNumber happens with
-		// OpenClipboard on the same thread.
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		for {
-			r, _, _ := openClipboard.Call(0)
-			if r == 0 {
-				continue
-			}
-			break
-		}
-
-		// var param uintptr
-		switch t {
-		case FmtImage:
-			err := writeImage(buf)
-			if err != nil {
-				errch <- err
-				closeClipboard.Call()
-				return
-			}
-		case FmtFilepath:
-			err := writeFiles(buf)
-			if err != nil {
-				errch <- err
-				closeClipboard.Call()
-				return
-			}
-		case FmtText:
-			fallthrough
-		default:
-			// param = cFmtUnicodeText
-			err := writeText(buf)
-			if err != nil {
-				errch <- err
-				closeClipboard.Call()
-				return
-			}
-		}
-		// Close the clipboard otherwise other applications cannot
-		// paste the data.
-		closeClipboard.Call()
-
-		cnt, _, _ := getClipboardSequenceNumber.Call()
-		errch <- nil
-		for {
-			time.Sleep(time.Second)
-			cur, _, _ := getClipboardSequenceNumber.Call()
-			if cur != cnt {
-				changed <- struct{}{}
-				close(changed)
-				return
-			}
-		}
-	}()
-	err := <-errch
+func bmp_to_png(bmpBuf *bytes.Buffer) (buf []byte, err error) {
+	var f bytes.Buffer
+	original_image, err := bmp.Decode(bmpBuf)
 	if err != nil {
 		return nil, err
 	}
-	return changed, nil
-}
-
-func watch(ctx context.Context) <-chan ClipboardContent {
-	recv := make(chan ClipboardContent, 1)
-	ready := make(chan struct{})
-	go func() {
-		// not sure if we are too slow or the user too fast :)
-		ti := time.NewTicker(time.Second)
-		cnt, _, _ := getClipboardSequenceNumber.Call()
-		ready <- struct{}{}
-		for {
-			select {
-			case <-ctx.Done():
-				close(recv)
-				return
-			case <-ti.C:
-				cur, _, _ := getClipboardSequenceNumber.Call()
-				if cnt != cur {
-					cnt = cur
-					content := clipboard_read_content()
-					recv <- content
-				}
-			}
-		}
-	}()
-	<-ready
-	return recv
-}
-
-func clipboard_read_content() ClipboardContent {
-	cur_types := clipboard_cur_types()
-	var maybe_type string
-	for _, t := range cur_types {
-		if t == "public.utf8-plain-text" {
-			maybe_type = t
-			b, err := read(FmtText)
-			d := ClipboardContent{
-				Type:  maybe_type,
-				Data:  b,
-				Error: nil,
-			}
-			if err != nil {
-				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
-			}
-			return d
-		}
-		if t == "public.file-url" {
-			maybe_type = t
-			b, err := read(FmtFilepath)
-			d := ClipboardContent{
-				Type:  maybe_type,
-				Data:  b,
-				Error: nil,
-			}
-			if err != nil {
-
-				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
-			}
-			return d
-		}
-		if t == "public.png" {
-			maybe_type = t
-			b, err := Read(FmtImage)
-			d := ClipboardContent{
-				Type:  maybe_type,
-				Data:  b,
-				Error: nil,
-			}
-			if err != nil {
-				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败", maybe_type)
-			}
-			return d
-		}
+	err = png.Encode(&f, original_image)
+	if err != nil {
+		return nil, err
 	}
-	type_text := strings.Join(cur_types, "\n")
-	return ClipboardContent{
-		Type:  type_text,
-		Data:  []byte{},
-		Error: fmt.Errorf("无法处理的内容类型"),
-	}
+	return f.Bytes(), nil
 }
 
-func clipboard_cur_types() []string {
-	return []string{}
+func byte_slice_to_string_slice(b []byte) ([]string, error) {
+	var strs []string
+	err := json.Unmarshal(b, &strs)
+	return strs, err
 }
-
-const (
-	cFmtBitmap      = 2 // Win+PrintScreen
-	cFmtUnicodeText = 13
-	cFmtFilepaths   = 15
-	cFmtDIBV5       = 17
-	// Screenshot taken from special shortcut is in different format (why??), see:
-	// https://jpsoft.com/forums/threads/detecting-clipboard-format.5225/
-	cFmtDataObject = 49161 // Shift+Win+s, returned from enumClipboardFormats
-	gmemMoveable   = 0x0002
-
-	CP_UTF8      = 65001
-	CF_HDROP     = 15
-	WM_DROPFILES = 0x0233
-)
-
-// BITMAPV5Header structure, see:
-// https://docs.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapv5header
-type bitmapV5Header struct {
-	Size          uint32
-	Width         int32
-	Height        int32
-	Planes        uint16
-	BitCount      uint16
-	Compression   uint32
-	SizeImage     uint32
-	XPelsPerMeter int32
-	YPelsPerMeter int32
-	ClrUsed       uint32
-	ClrImportant  uint32
-	RedMask       uint32
-	GreenMask     uint32
-	BlueMask      uint32
-	AlphaMask     uint32
-	CSType        uint32
-	Endpoints     struct {
-		CiexyzRed, CiexyzGreen, CiexyzBlue struct {
-			CiexyzX, CiexyzY, CiexyzZ int32 // FXPT2DOT30
-		}
-	}
-	GammaRed    uint32
-	GammaGreen  uint32
-	GammaBlue   uint32
-	Intent      uint32
-	ProfileData uint32
-	ProfileSize uint32
-	Reserved    uint32
-}
-
-type bitmapHeader struct {
-	Size          uint32
-	Width         uint32
-	Height        uint32
-	PLanes        uint16
-	BitCount      uint16
-	Compression   uint32
-	SizeImage     uint32
-	XPelsPerMeter uint32
-	YPelsPerMeter uint32
-	ClrUsed       uint32
-	ClrImportant  uint32
-}
-
-// 定义POINT结构体
-type POINT struct {
-	x int32
-	y int32
-}
-
-// 定义DROPFILES结构体
-type DROPFILES struct {
-	p_files uint32
-	pt      POINT
-	f_nc    int32
-	f_wide  int32
-}
-
-// Calling a Windows DLL, see:
-// https://github.com/golang/go/wiki/WindowsDLLs
-var (
-	user32 = syscall.MustLoadDLL("user32")
-	// Opens the clipboard for examination and prevents other
-	// applications from modifying the clipboard content.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard
-	openClipboard = user32.MustFindProc("OpenClipboard")
-	// Closes the clipboard.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closeclipboard
-	closeClipboard = user32.MustFindProc("CloseClipboard")
-	// Empties the clipboard and frees handles to data in the clipboard.
-	// The function then assigns ownership of the clipboard to the
-	// window that currently has the clipboard open.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-emptyclipboard
-	emptyClipboard = user32.MustFindProc("EmptyClipboard")
-	// Retrieves data from the clipboard in a specified format.
-	// The clipboard must have been opened previously.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboarddata
-	getClipboardData = user32.MustFindProc("GetClipboardData")
-	// Places data on the clipboard in a specified clipboard format.
-	// The window must be the current clipboard owner, and the
-	// application must have called the OpenClipboard function. (When
-	// responding to the WM_RENDERFORMAT message, the clipboard owner
-	// must not call OpenClipboard before calling SetClipboardData.)
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setclipboarddata
-	setClipboardData = user32.MustFindProc("SetClipboardData")
-	// Determines whether the clipboard contains data in the specified format.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-isclipboardformatavailable
-	isClipboardFormatAvailable = user32.MustFindProc("IsClipboardFormatAvailable")
-	// Clipboard data formats are stored in an ordered list. To perform
-	// an enumeration of clipboard data formats, you make a series of
-	// calls to the EnumClipboardFormats function. For each call, the
-	// format parameter specifies an available clipboard format, and the
-	// function returns the next available clipboard format.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-isclipboardformatavailable
-	enumClipboardFormats = user32.MustFindProc("EnumClipboardFormats")
-	// Retrieves the clipboard sequence number for the current window station.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboardsequencenumber
-	getClipboardSequenceNumber = user32.MustFindProc("GetClipboardSequenceNumber")
-	// Registers a new clipboard format. This format can then be used as
-	// a valid clipboard format.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
-	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
-	// lstrcpyW                 = user32.MustFindProc("lstrcpyW")
-
-	shell32       = syscall.NewLazyDLL("shell32")
-	dragQueryFile = shell32.NewProc("DragQueryFileW")
-
-	kernel32 = syscall.NewLazyDLL("kernel32")
-
-	// Locks a global memory object and returns a pointer to the first
-	// byte of the object's memory block.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globallock
-	gLock               = kernel32.NewProc("GlobalLock")
-	gSize               = kernel32.NewProc("GlobalSize")
-	multiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
-	// Decrements the lock count associated with a memory object that was
-	// allocated with GMEM_MOVEABLE. This function has no effect on memory
-	// objects allocated with GMEM_FIXED.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalunlock
-	gUnlock = kernel32.NewProc("GlobalUnlock")
-	// Allocates the specified number of bytes from the heap.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalalloc
-	gAlloc = kernel32.NewProc("GlobalAlloc")
-	// Frees the specified global memory object and invalidates its handle.
-	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalfree
-	gFree   = kernel32.NewProc("GlobalFree")
-	memMove = kernel32.NewProc("RtlMoveMemory")
-)
