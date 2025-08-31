@@ -1,11 +1,42 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"image/png"
+	"os"
+	"path/filepath"
 
 	"clipboard_t/pkg/clipboard"
+
+	"golang.org/x/image/bmp"
 )
+
+type BitmapFileHeader struct {
+	// bfType     uint16
+	// bfSize     uint32
+	// bfReserved uint16
+	// bfOffBits  uint32
+	bfType     [2]byte
+	bfSize     uint32
+	bfReserved [2]uint16
+	bfOffBits  uint32
+}
+
+type BitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
 
 // Pixel 表示一个像素点，包含坐标和RGB颜色
 type Pixel struct {
@@ -14,7 +45,6 @@ type Pixel struct {
 }
 
 func create_bmp(pixels []Pixel) []byte {
-	// 确定图像尺寸
 	var width, height int
 	for _, p := range pixels {
 		if p.X+1 > width {
@@ -42,41 +72,53 @@ func create_bmp(pixels []Pixel) []byte {
 	}
 
 	// 计算行字节数 (每行必须是4的倍数)
-	bytes_per_row := width * 3
-	padding := (4 - (bytes_per_row % 4)) % 4
-	bytes_per_row += padding
+	bytes_per_row := width * 4
+	// padding := (4 - (bytesPerRow % 4)) % 4
+	// bytesPerRow += padding
 
-	// 准备文件头 (14字节)
-	file_header := make([]byte, 14)
-	file_header[0] = 'B'
-	file_header[1] = 'M'
-	file_size := 14 + 40 + bytes_per_row*height // 14+40 + 像素数据
-	binary.LittleEndian.PutUint32(file_header[2:6], uint32(file_size))
-	binary.LittleEndian.PutUint32(file_header[10:14], 54) // 像素数据偏移量
+	// 初始化文件头
+	fileHeader := BitmapFileHeader{
+		bfType:    [2]byte{'B', 'M'},
+		bfSize:    54 + uint32(bytes_per_row*height), // 不需要额外填充
+		bfOffBits: 54,
+	}
 
-	// 准备DIB头 (40字节)
-	info_header := make([]byte, 40)
-	binary.LittleEndian.PutUint32(info_header[0:4], 40)
-	binary.LittleEndian.PutUint32(info_header[4:8], uint32(width))
-	binary.LittleEndian.PutUint32(info_header[8:12], uint32(height))
-	binary.LittleEndian.PutUint16(info_header[12:14], 1)
-	binary.LittleEndian.PutUint16(info_header[14:16], 24)
-	binary.LittleEndian.PutUint32(info_header[20:24], uint32(bytes_per_row*height))
-
+	// 初始化信息头
+	infoHeader := BitmapInfoHeader{
+		Size:      40,
+		Width:     int32(width),
+		Height:    int32(height),
+		Planes:    1,
+		BitCount:  32, // 32位色深
+		SizeImage: uint32(bytes_per_row * height),
+	}
 	// 创建缓冲区
-	buffer := make([]byte, 0, file_size)
-	buffer = append(buffer, file_header...)
-	buffer = append(buffer, info_header...)
+	buffer := make([]byte, 0, fileHeader.bfSize)
 
-	// 添加像素数据 (从下到上)
-	padding_bytes := make([]byte, padding)
+	// 写入文件头
+	fileHeaderBytes := make([]byte, 14)
+	binary.LittleEndian.PutUint16(fileHeaderBytes[0:2], binary.LittleEndian.Uint16(fileHeader.bfType[:]))
+	binary.LittleEndian.PutUint32(fileHeaderBytes[2:6], fileHeader.bfSize)
+	binary.LittleEndian.PutUint32(fileHeaderBytes[10:14], fileHeader.bfOffBits)
+	buffer = append(buffer, fileHeaderBytes...)
+
+	// 写入信息头
+	infoHeaderBytes := make([]byte, 40)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[0:4], infoHeader.Size)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[4:8], uint32(infoHeader.Width))
+	binary.LittleEndian.PutUint32(infoHeaderBytes[8:12], uint32(infoHeader.Height))
+	binary.LittleEndian.PutUint16(infoHeaderBytes[12:14], infoHeader.Planes)
+	binary.LittleEndian.PutUint16(infoHeaderBytes[14:16], infoHeader.BitCount)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[20:24], infoHeader.SizeImage)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[24:28], uint32(infoHeader.XPelsPerMeter))
+	binary.LittleEndian.PutUint32(infoHeaderBytes[28:32], uint32(infoHeader.YPelsPerMeter))
+	buffer = append(buffer, infoHeaderBytes...)
+
+	// 写入像素数据 (从下到上)
 	for y := height - 1; y >= 0; y-- {
 		for x := 0; x < width; x++ {
-			buffer = append(buffer, pixelMap[y][x]...)
-		}
-		// 添加行填充
-		if padding > 0 {
-			buffer = append(buffer, padding_bytes...)
+			pixel := pixelMap[y][x]
+			buffer = append(buffer, pixel[0], pixel[1], pixel[2], 0)
 		}
 	}
 
@@ -90,57 +132,35 @@ func main() {
 		fmt.Printf("初始化剪贴板失败: %v\n", err)
 		return
 	}
-	// files_name := []string{"./avatar.jpg", "./github-card.png"}
-	// files_name := []string{"./sample1.bmp", "./sample1.png", "./sample2.png"}
-	// var files_path []string
-	// for _, f := range files_name {
-	// 	ff := filepath.Join("_example", f)
-	// 	file_path, err := filepath.Abs(ff)
-	// 	if err != nil {
-	// 		continue
-	// 	}
-	// 	files_path = append(files_path, file_path)
-	// }
-	// image_file_path := files_path[0]
-	// data, err := os.ReadFile(image_file_path)
-	// if err != nil {
-	// 	fmt.Println("打开文件失败:", err)
-	// 	return
-	// }
-	// fmt.Println("the original buffer", len(data))
-	// fmt.Println(data)
-	// // png_file, err := png.Decode(bytes.NewReader(data))
-	// // if err != nil {
-	// // 	fmt.Println("解码 Png 失败 :", err)
-	// // 	return
-	// // }
-	// // var bmp_buf bytes.Buffer
-
-	// // // fmt.Println(png_file.Bounds())
-
-	// img, err := bmp.Decode(bytes.NewReader(data))
-	// if err != nil {
-	// 	fmt.Println("decode bmp failed, because", err.Error())
-	// 	return
-	// }
-	// fmt.Println("the bmp img", img.Bounds())
-	// // // 将image.Image编码为BMP格式写入缓冲区
-	// // err = bmp.Encode(&bmp_buf, png_file)
-	// // fmt.Println("the bmp bytes", len(bmp_buf.Bytes()))
-	// // fmt.Println(bmp_buf.Bytes())
-	// // if err != nil {
-	// // 	fmt.Println("转换 bmp 失败:", err)
-	// // 	return
-	// // }
-
-	pixels := []Pixel{
-		{X: 0, Y: 0, R: 227, G: 69, B: 22},   // 左上角
-		{X: 1, Y: 0, R: 239, G: 239, B: 239}, // 右上角
-		{X: 0, Y: 1, R: 227, G: 69, B: 22},   // 左下角
-		{X: 1, Y: 1, R: 239, G: 239, B: 239}, // 右下角
+	files_name := []string{"./sample1.bmp", "./sample1.png", "./sample2.png", "./avatar.jpg", "./github-card.png"}
+	var files_path []string
+	for _, f := range files_name {
+		ff := filepath.Join("_example", f)
+		file_path, err := filepath.Abs(ff)
+		if err != nil {
+			continue
+		}
+		files_path = append(files_path, file_path)
 	}
-	data := create_bmp(pixels)
-	err = clipboard.WriteImage(data)
+	image_file_path := files_path[4]
+	data, err := os.ReadFile(image_file_path)
+	if err != nil {
+		fmt.Println("打开文件失败:", err)
+		return
+	}
+	png_file, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		fmt.Println("解码 Png 失败 :", err)
+		return
+	}
+	var bmp_buf bytes.Buffer
+	err = bmp.Encode(&bmp_buf, png_file)
+	if err != nil {
+		fmt.Println("转换 bmp 失败:", err)
+		return
+	}
+	bmp_bytes := bmp_buf.Bytes()
+	err = clipboard.WriteImage(bmp_bytes)
 	if err != nil {
 		fmt.Printf(" %v\n", err)
 		return

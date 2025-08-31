@@ -145,14 +145,14 @@ type HDROPHeader struct {
 }
 
 type BitmapFileHeader struct {
-	bfType     uint16
-	bfSize     uint32
-	bfReserved uint16
-	bfOffBits  uint32
-	// bfType     [2]byte
+	// bfType     uint16
 	// bfSize     uint32
-	// bfReserved [2]uint16
+	// bfReserved uint16
 	// bfOffBits  uint32
+	bfType     [2]byte
+	bfSize     uint32
+	bfReserved [2]uint16
+	bfOffBits  uint32
 }
 
 type BitmapInfoHeader struct {
@@ -824,12 +824,16 @@ func write_image(buf []byte) error {
 	open_clipboard()
 	defer close_clipboard()
 	// fmt.Println("[]write image", buf, len(buf))
+	r, _, err := emptyClipboard.Call()
+	if r == 0 {
+		return fmt.Errorf("failed to clear clipboard: %w", err)
+	}
 
 	// const FILE_HEADER_LENGTH = int(unsafe.Sizeof(BitmapFileHeader{}))
 	const FILE_HEADER_LENGTH = 14
 	const INFO_HEADER_LENGTH = int(unsafe.Sizeof(BitmapInfoHeader{}))
 
-	fmt.Println("the file header length and info header length", FILE_HEADER_LENGTH, INFO_HEADER_LENGTH)
+	// fmt.Println("the file header length and info header length", FILE_HEADER_LENGTH, INFO_HEADER_LENGTH)
 
 	if len(buf) < FILE_HEADER_LENGTH+INFO_HEADER_LENGTH {
 		return fmt.Errorf("数据大小不正确")
@@ -837,14 +841,17 @@ func write_image(buf []byte) error {
 	var file_header BitmapFileHeader
 	file_header_data := (*[FILE_HEADER_LENGTH]byte)(unsafe.Pointer(&file_header))
 	copy(file_header_data[:], buf[:FILE_HEADER_LENGTH])
-	fmt.Println("[]write image - after copy file header", len(buf), file_header.bfOffBits)
-	fmt.Println(buf)
+	file_header.bfOffBits = 54
+	// fmt.Println("[]write image - after copy file header", len(buf), file_header)
+	// fmt.Println(buf)
 	if len(buf) <= int(file_header.bfOffBits) {
 		return fmt.Errorf("数据大小不正确2")
 	}
+
 	var info_header BitmapInfoHeader
 	info_header_data := (*[INFO_HEADER_LENGTH]byte)(unsafe.Pointer(&info_header))
 	copy(info_header_data[:], buf[FILE_HEADER_LENGTH:FILE_HEADER_LENGTH+INFO_HEADER_LENGTH])
+	fmt.Println("[]write image - after copy info header", info_header.SizeImage, info_header.Size)
 
 	bitmap := buf[file_header.bfOffBits:]
 	if len(bitmap) < int(info_header.SizeImage) {
@@ -874,15 +881,7 @@ func write_image(buf []byte) error {
 		return fmt.Errorf("创建 DIB 位图失败，%v", err.Error())
 	}
 	// defer win.DeleteObject(handle)
-	// r, _, err := emptyClipboard.Call()
-	// if r == 0 {
-	// 	return fmt.Errorf("failed to clear clipboard: %w", err)
-	// }
-	// if err := openClipboard.Call(0); err != nil {
-	// 	return err
-	// }
-	// defer win.CloseClipboard()
-	r, _, err := setClipboardData.Call(CF_BITMAP, r1)
+	r, _, err = setClipboardData.Call(CF_BITMAP, r1)
 	if r == 0 {
 		// return fmt.Errorf("设置剪贴板数据失败，错误码: %d", win.GetLastError())
 		return fmt.Errorf("写入图片失败，%v", err.Error())
