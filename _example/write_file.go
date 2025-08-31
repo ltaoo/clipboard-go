@@ -1,8 +1,10 @@
 package main
 
 import (
-	"clipboard_t/pkg/clipboard"
 	"fmt"
+	"path/filepath"
+
+	"clipboard_t/pkg/clipboard"
 )
 
 func main() {
@@ -12,10 +14,17 @@ func main() {
 		fmt.Printf("初始化剪贴板失败: %v\n", err)
 		return
 	}
-	// files := []string{"/Users/mayfair/Documents/deploy_step4.png", "/Users/mayfair/Documents/StatsCard.tsx"}
-	// files := []string{"/Users/litao/Downloads/avatar.png", "/Users/litao/Downloads/face.png"}
-	files := []string{"/Users/litao/Downloads/flutterio-icon.svg", "/Users/litao/Downloads/golang.svg"}
-	err = clipboard.WriteFiles(files)
+	files_name := []string{"./avatar.jpg", "./github-card.png"}
+	var files_path []string
+	for _, f := range files_name {
+		ff := filepath.Join("_example", f)
+		file_path, err := filepath.Abs(ff)
+		if err != nil {
+			continue
+		}
+		files_path = append(files_path, file_path)
+	}
+	err = clipboard.WriteFiles(files_path)
 	if err != nil {
 		fmt.Printf(" %v\n", err)
 		return

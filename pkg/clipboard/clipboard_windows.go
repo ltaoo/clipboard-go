@@ -44,9 +44,25 @@ const (
 	WM_DROPFILES   = 0x0233
 	DIB_RGB_COLORS = 0x0000
 	BI_RGB         = 0x0000
+	CBM_INIT       = 0x04
 
 	fileHeaderLen = 14
 	infoHeaderLen = 40
+
+	// Use GL_IMAGES for GamutMappingIntent
+	// Other options:
+	LCS_GM_ABS_COLORIMETRIC = 0x00000008
+	LCS_GM_BUSINESS         = 0x00000001
+	LCS_GM_GRAPHICS         = 0x00000002
+	LCS_GM_IMAGES           = 0x00000004
+	// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/9fec0834-607d-427d-abd5-ab240fb0db38
+
+	// Use calibrated RGB values as Go's image/png assumes linear color space.
+	// Other options:
+	LCS_CALIBRATED_RGB      = 0x00000000
+	LCS_sRGB                = 0x73524742
+	LCS_WINDOWS_COLOR_SPACE = 0x57696E20
+	// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/eb4bbd50-b3ce-4917-895c-be31f214797f
 )
 
 //	type bitmapHeader struct {
@@ -128,8 +144,18 @@ type HDROPHeader struct {
 	fWide  uint32
 }
 
-// 假设对应的结构体定义
-type BITMAPINFOHEADER struct {
+type BitmapFileHeader struct {
+	bfType     uint16
+	bfSize     uint32
+	bfReserved uint16
+	bfOffBits  uint32
+	// bfType     [2]byte
+	// bfSize     uint32
+	// bfReserved [2]uint16
+	// bfOffBits  uint32
+}
+
+type BitmapInfoHeader struct {
 	Size          uint32
 	Width         int32
 	Height        int32
@@ -143,29 +169,29 @@ type BITMAPINFOHEADER struct {
 	ClrImportant  uint32
 }
 
-type RGBQUAD struct {
+type RGBQuad struct {
 	rgbBlue     uint8
 	rgbGreen    uint8
 	rgbRed      uint8
 	rgbReserved uint8
 }
 
-type BITMAPINFO struct {
-	bmiHeader BITMAPINFOHEADER
+type BitmapInfo struct {
+	bmiHeader BitmapInfoHeader
 	// bmiHeader BitmapInfo
-	bmiColors [1]RGBQUAD
+	bmiColors [1]RGBQuad
 }
 
-// 定义POINT结构体
-type POINT struct {
+// 定义Point结构体
+type Point struct {
 	x int32
 	y int32
 }
 
-// 定义DROPFILES结构体
-type DROPFILES struct {
+// 定义DropFiles结构体
+type DropFiles struct {
 	p_files uint32
-	pt      POINT
+	pt      Point
 	f_nc    int32
 	f_wide  int32
 }
@@ -218,9 +244,10 @@ var (
 	getDC     = user32.MustFindProc("GetDC")
 	releaseDC = user32.MustFindProc("ReleaseDC")
 
-	libgdi32   = syscall.NewLazyDLL("gdi32")
-	getDIBits  = libgdi32.NewProc("GetDIBits")
-	getObjectW = libgdi32.NewProc("GetObjectW")
+	libgdi32       = syscall.NewLazyDLL("gdi32")
+	getDIBits      = libgdi32.NewProc("GetDIBits")
+	createDIBitmap = libgdi32.NewProc("CreateDIBitmap")
+	getObjectW     = libgdi32.NewProc("GetObjectW")
 
 	shell32       = syscall.NewLazyDLL("shell32")
 	dragQueryFile = shell32.NewProc("DragQueryFileW")
@@ -498,16 +525,15 @@ func read_image() ([]byte, error) {
 	}
 
 	clr_bits := int(bitmap.bmPlanes) * int(bitmap.bmBitPixel)
-	fmt.Println("the clr_bits", clr_bits)
 
-	header_storage_size := uintptr(unsafe.Sizeof(BITMAPINFOHEADER{}))
+	header_storage_size := uintptr(unsafe.Sizeof(BitmapInfoHeader{}))
 	if clr_bits <= 24 {
-		header_storage_size = uintptr(unsafe.Sizeof(BITMAPINFOHEADER{})) + uintptr(unsafe.Sizeof(RGBQUAD{}))*(1<<uintptr(clr_bits))
+		header_storage_size = uintptr(unsafe.Sizeof(BitmapInfoHeader{})) + uintptr(unsafe.Sizeof(RGBQuad{}))*(1<<uintptr(clr_bits))
 	}
 	header_storage := make([]byte, header_storage_size)
-	info := (*BITMAPINFO)(unsafe.Pointer(&header_storage[0]))
+	info := (*BitmapInfo)(unsafe.Pointer(&header_storage[0]))
 
-	info.bmiHeader.Size = uint32(unsafe.Sizeof(BITMAPINFOHEADER{}))
+	info.bmiHeader.Size = uint32(unsafe.Sizeof(BitmapInfoHeader{}))
 	info.bmiHeader.Width = bitmap.bmWidth
 	info.bmiHeader.Height = bitmap.bmHeight
 	info.bmiHeader.Planes = bitmap.bmPlanes
@@ -520,13 +546,9 @@ func read_image() ([]byte, error) {
 	info.bmiHeader.ClrImportant = 0
 
 	header := &info.bmiHeader
-	// header.SizeImage = ((header.Width*int32(clr_bits) + 31) / 8) * uint32(header.Height)
-	// header := (*bitmapHeader)(unsafe.Pointer(p))
 
 	// fmt.Println("the header", header.BitCount, header.Width, header.PLanes, header.BitsPixel, header.PLanes*header.BitsPixel)
-	// img_size := int(info.bmiHeader.SizeImage)
-	img_size := int(header.SizeImage)
-	buffer := make([]byte, img_size)
+	buffer := make([]byte, int(header.SizeImage))
 
 	// data := make([]byte, header.SizeImage)
 	hdc, _, err := getDC.Call(0)
@@ -539,48 +561,30 @@ func read_image() ([]byte, error) {
 			fmt.Printf("ReleaseDC failed: %v\n", err)
 		}
 	}()
-	_, _, err = getDIBits.Call(
+	r, _, err = getDIBits.Call(
 		hdc,
 		p,
 		0,
-		// uintptr(bitmap.bmHeight),
 		uintptr(header.Height),
 		uintptr(unsafe.Pointer(&buffer[0])),
 		uintptr(unsafe.Pointer(info)),
 		DIB_RGB_COLORS)
+	if r == 0 {
+		return nil, fmt.Errorf("GetDIBits failed: %v", err)
+	}
 	if err.Error() != "The operation completed successfully." {
 		return nil, fmt.Errorf("GetDIBits failed: %v", err)
 	}
 	fmt.Println("the data read using GetDIBits", len(buffer), header.Size)
-	// sh := unsafe.SliceData(data)
-	// *(*uintptr)(unsafe.Pointer(&sh)) = p
-	// var length int
-	// // var capacity int
-	// if header.BitCount == 32 {
-	// 	// capacity = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
-	// 	length = int(header.Size + 4*uint32(header.Width)*uint32(header.Height))
-	// } else if header.BitCount == 24 {
-	// 	// capacity = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
-	// 	length = int(header.Size + 3*uint32(header.Width)*uint32(header.Height))
-	// } else {
-	// 	return nil, err_unsupported
-	// }
-	// data = unsafe.Slice((*byte)(unsafe.Pointer(sh)), length)
-	// fmt.Println(data)
-	// header := info.bmiHeader
 	img := image.NewRGBA(image.Rect(0, 0, int(header.Width), int(header.Height)))
 
-	// offset := int(header.Size)
 	offset := 0
 	stride := int(header.Width)
 	for y := 0; y < int(header.Height); y++ {
 		for x := 0; x < int(header.Width); x++ {
-			idx := offset + 4*(y*stride+x)
-			// 移除水平方向的取模操作，直接使用原坐标
-			// xhat := x
-			// yhat := int(info.Height) - 1 - y
 			xhat := (x + int(header.Width)) % int(header.Width)
 			yhat := int(header.Height) - 1 - y
+			idx := offset + 4*(y*stride+x)
 			r := buffer[idx+2]
 			g := buffer[idx+1]
 			b := buffer[idx+0]
@@ -819,95 +823,170 @@ func write_text(text string) error {
 func write_image(buf []byte) error {
 	open_clipboard()
 	defer close_clipboard()
-	r, _, err := emptyClipboard.Call()
-	if r == 0 {
-		return fmt.Errorf("failed to clear clipboard: %w", err)
+	// fmt.Println("[]write image", buf, len(buf))
+
+	// const FILE_HEADER_LENGTH = int(unsafe.Sizeof(BitmapFileHeader{}))
+	const FILE_HEADER_LENGTH = 14
+	const INFO_HEADER_LENGTH = int(unsafe.Sizeof(BitmapInfoHeader{}))
+
+	fmt.Println("the file header length and info header length", FILE_HEADER_LENGTH, INFO_HEADER_LENGTH)
+
+	if len(buf) < FILE_HEADER_LENGTH+INFO_HEADER_LENGTH {
+		return fmt.Errorf("数据大小不正确")
+	}
+	var file_header BitmapFileHeader
+	file_header_data := (*[FILE_HEADER_LENGTH]byte)(unsafe.Pointer(&file_header))
+	copy(file_header_data[:], buf[:FILE_HEADER_LENGTH])
+	fmt.Println("[]write image - after copy file header", len(buf), file_header.bfOffBits)
+	fmt.Println(buf)
+	if len(buf) <= int(file_header.bfOffBits) {
+		return fmt.Errorf("数据大小不正确2")
+	}
+	var info_header BitmapInfoHeader
+	info_header_data := (*[INFO_HEADER_LENGTH]byte)(unsafe.Pointer(&info_header))
+	copy(info_header_data[:], buf[FILE_HEADER_LENGTH:FILE_HEADER_LENGTH+INFO_HEADER_LENGTH])
+
+	bitmap := buf[file_header.bfOffBits:]
+	if len(bitmap) < int(info_header.SizeImage) {
+		return fmt.Errorf("数据大小不正确3")
 	}
 
-	// empty text, we are done here.
-	if len(buf) == 0 {
-		return nil
+	hdc, _, err := getDC.Call(0)
+	if hdc == 0 {
+		return fmt.Errorf("GetDC failed: %v", err)
 	}
-
-	img, err := png.Decode(bytes.NewReader(buf))
-	if err != nil {
-		return fmt.Errorf("input bytes is not PNG encoded: %w", err)
-	}
-
-	offset := unsafe.Sizeof(bitmapV5Header{})
-	width := img.Bounds().Dx()
-	height := img.Bounds().Dy()
-	image_size := 4 * width * height
-
-	data := make([]byte, int(offset)+image_size)
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			idx := int(offset) + 4*(y*width+x)
-			r, g, b, a := img.At(x, height-1-y).RGBA()
-			data[idx+2] = uint8(r)
-			data[idx+1] = uint8(g)
-			data[idx+0] = uint8(b)
-			data[idx+3] = uint8(a)
+	defer func() {
+		r, _, err := releaseDC.Call(0, hdc)
+		if r == 0 {
+			fmt.Printf("ReleaseDC failed: %v\n", err)
 		}
+	}()
+
+	r1, _, err := createDIBitmap.Call(
+		hdc,
+		uintptr(unsafe.Pointer(&info_header)),
+		CBM_INIT,
+		uintptr(unsafe.Pointer(&bitmap[0])),
+		uintptr(unsafe.Pointer(&info_header)),
+		DIB_RGB_COLORS,
+	)
+	if r1 == 0 {
+		return fmt.Errorf("创建 DIB 位图失败，%v", err.Error())
 	}
-
-	info := bitmapV5Header{}
-	info.Size = uint32(offset)
-	info.Width = int32(width)
-	info.Height = int32(height)
-	info.Planes = 1
-	info.Compression = 0 // BI_RGB
-	info.SizeImage = uint32(4 * info.Width * info.Height)
-	info.RedMask = 0xff0000 // default mask
-	info.GreenMask = 0xff00
-	info.BlueMask = 0xff
-	info.AlphaMask = 0xff000000
-	info.BitCount = 32 // we only deal with 32 bpp at the moment.
-	// Use calibrated RGB values as Go's image/png assumes linear color space.
-	// Other options:
-	// - LCS_CALIBRATED_RGB = 0x00000000
-	// - LCS_sRGB = 0x73524742
-	// - LCS_WINDOWS_COLOR_SPACE = 0x57696E20
-	// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/eb4bbd50-b3ce-4917-895c-be31f214797f
-	info.CSType = 0x73524742
-	// Use GL_IMAGES for GamutMappingIntent
-	// Other options:
-	// - LCS_GM_ABS_COLORIMETRIC = 0x00000008
-	// - LCS_GM_BUSINESS = 0x00000001
-	// - LCS_GM_GRAPHICS = 0x00000002
-	// - LCS_GM_IMAGES = 0x00000004
-	// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/9fec0834-607d-427d-abd5-ab240fb0db38
-	info.Intent = 4 // LCS_GM_IMAGES
-
-	infob := make([]byte, int(unsafe.Sizeof(info)))
-	for i, v := range *(*[unsafe.Sizeof(info)]byte)(unsafe.Pointer(&info)) {
-		infob[i] = v
-	}
-	copy(data[:], infob[:])
-
-	hMem, _, err := gAlloc.Call(gmemMoveable,
-		uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
-	if hMem == 0 {
-		return fmt.Errorf("failed to alloc global memory: %w", err)
-	}
-
-	p, _, err := gLock.Call(hMem)
-	if p == 0 {
-		return fmt.Errorf("failed to lock global memory: %w", err)
-	}
-	defer gUnlock.Call(hMem)
-
-	memMove.Call(p, uintptr(unsafe.Pointer(&data[0])),
-		uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
-
-	v, _, err := setClipboardData.Call(cFmtDIBV5, hMem)
-	if v == 0 {
-		gFree.Call(hMem)
-		return fmt.Errorf("failed to set text to clipboard: %w", err)
+	// defer win.DeleteObject(handle)
+	// r, _, err := emptyClipboard.Call()
+	// if r == 0 {
+	// 	return fmt.Errorf("failed to clear clipboard: %w", err)
+	// }
+	// if err := openClipboard.Call(0); err != nil {
+	// 	return err
+	// }
+	// defer win.CloseClipboard()
+	r, _, err := setClipboardData.Call(CF_BITMAP, r1)
+	if r == 0 {
+		// return fmt.Errorf("设置剪贴板数据失败，错误码: %d", win.GetLastError())
+		return fmt.Errorf("写入图片失败，%v", err.Error())
 	}
 
 	return nil
 }
+
+// func write_image(buf []byte) error {
+// 	open_clipboard()
+// 	defer close_clipboard()
+// 	r, _, err := emptyClipboard.Call()
+// 	if r == 0 {
+// 		return fmt.Errorf("failed to clear clipboard: %w", err)
+// 	}
+// 	// empty text, we are done here.
+// 	if len(buf) == 0 {
+// 		return nil
+// 	}
+// 	reader := bytes.NewReader(buf)
+// 	img, err := jpeg.Decode(reader)
+
+// 	rgbaImg := image.NewRGBA(img.Bounds())
+// 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+// 		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+// 			rgbaImg.Set(x, y, img.At(x, y))
+// 		}
+// 	}
+
+// 	// img, kind, err := image.Decode(bytes.NewReader(buf))
+// 	if err != nil {
+// 		return fmt.Errorf("解析图片失败，%v", err.Error())
+// 	}
+// 	// fmt.Printf("Source image format: %s\n", kind)
+
+// 	// 创建一个字节缓冲区用于存储PNG数据
+// 	var buffer bytes.Buffer
+// 	err = png.Encode(&buffer, rgbaImg)
+// 	// img, err = png.Decode(bytes.NewReader(buffer))
+// 	if err != nil {
+// 		return fmt.Errorf("input bytes is not PNG encoded: %w", err)
+// 	}
+
+// 	offset := unsafe.Sizeof(bitmapV5Header{})
+// 	width := img.Bounds().Dx()
+// 	height := img.Bounds().Dy()
+// 	image_size := 4 * width * height
+
+// 	data := make([]byte, int(offset)+image_size)
+// 	for y := 0; y < height; y++ {
+// 		for x := 0; x < width; x++ {
+// 			idx := int(offset) + 4*(y*width+x)
+// 			r, g, b, a := img.At(x, height-1-y).RGBA()
+// 			data[idx+2] = uint8(r)
+// 			data[idx+1] = uint8(g)
+// 			data[idx+0] = uint8(b)
+// 			data[idx+3] = uint8(a)
+// 		}
+// 	}
+
+// 	info := bitmapV5Header{}
+// 	info.Size = uint32(offset)
+// 	info.Width = int32(width)
+// 	info.Height = int32(height)
+// 	info.Planes = 1
+// 	info.Compression = 0 // BI_RGB
+// 	info.SizeImage = uint32(4 * info.Width * info.Height)
+// 	info.RedMask = 0xff0000 // default mask
+// 	info.GreenMask = 0xff00
+// 	info.BlueMask = 0xff
+// 	info.AlphaMask = 0xff000000
+// 	info.BitCount = 32 // we only deal with 32 bpp at the moment.
+// 	info.CSType = LCS_sRGB
+// 	info.Intent = LCS_GM_IMAGES
+
+// 	infob := make([]byte, int(unsafe.Sizeof(info)))
+// 	for i, v := range *(*[unsafe.Sizeof(info)]byte)(unsafe.Pointer(&info)) {
+// 		infob[i] = v
+// 	}
+// 	copy(data[:], infob[:])
+
+// 	hMem, _, err := gAlloc.Call(gmemMoveable,
+// 		uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
+// 	if hMem == 0 {
+// 		return fmt.Errorf("failed to alloc global memory: %w", err)
+// 	}
+
+// 	p, _, err := gLock.Call(hMem)
+// 	if p == 0 {
+// 		return fmt.Errorf("failed to lock global memory: %w", err)
+// 	}
+// 	defer gUnlock.Call(hMem)
+
+// 	memMove.Call(p, uintptr(unsafe.Pointer(&data[0])),
+// 		uintptr(len(data)*int(unsafe.Sizeof(data[0]))))
+
+// 	v, _, err := setClipboardData.Call(cFmtDIBV5, hMem)
+// 	if v == 0 {
+// 		gFree.Call(hMem)
+// 		return fmt.Errorf("failed to set text to clipboard: %w", err)
+// 	}
+
+// 	return nil
+// }
 
 func write_files(files []string) error {
 	open_clipboard()
@@ -940,9 +1019,9 @@ func write_files(files []string) error {
 	}
 
 	// 计算总内存大小
-	dropfiles := DROPFILES{
-		p_files: uint32(unsafe.Sizeof(DROPFILES{})),
-		pt:      POINT{x: 0, y: 0},
+	dropfiles := DropFiles{
+		p_files: uint32(unsafe.Sizeof(DropFiles{})),
+		pt:      Point{x: 0, y: 0},
 		f_nc:    0,
 		f_wide:  1,
 	}
@@ -963,7 +1042,7 @@ func write_files(files []string) error {
 	defer gUnlock.Call(hMem)
 
 	// 填充DROPFILES结构体
-	ptr := (*DROPFILES)(unsafe.Pointer(p))
+	ptr := (*DropFiles)(unsafe.Pointer(p))
 	*ptr = dropfiles
 
 	// 填充文件路径
