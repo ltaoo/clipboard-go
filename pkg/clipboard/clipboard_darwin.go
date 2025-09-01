@@ -46,9 +46,11 @@ var (
 	_propertyListForType      = objc.RegisterName("propertyListForType:")
 	_writeObjects             = objc.RegisterName("writeObjects:")
 	_setPropertyList_forType_ = objc.RegisterName("setPropertyListForType:")
-	_NSPasteboardTypeString   = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
-	_NSPasteboardTypePNG      = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
-	_NSPasteboardTypeFiles    = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
+	// https://developer.apple.com/documentation/appkit/nspasteboard/pasteboardtype?language=objc
+	_NSPasteboardTypeString = must2(purego.Dlsym(appkit, "NSPasteboardTypeString"))
+	_NSPasteboardTypeHTML   = must2(purego.Dlsym(appkit, "NSPasteboardTypeHTML"))
+	_NSPasteboardTypePNG    = must2(purego.Dlsym(appkit, "NSPasteboardTypePNG"))
+	_NSPasteboardTypeFiles  = must2(purego.Dlsym(appkit, "NSFilenamesPboardType"))
 
 	_NSMutableArray         = objc.GetClass("NSMutableArray")
 	_NSArray                = objc.GetClass("NSArray")
@@ -211,6 +213,7 @@ func read_content_with_type() ClipboardContent {
 func read_text() (string, error) {
 	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
 	__data := __pasteboard.Send(_dataForType, _NSPasteboardTypeString)
+	// __data := __pasteboard.Send(_dataForType, _NSPasteboardTypeHTML)
 	if __data == 0 {
 		return "", fmt.Errorf("读取数据失败")
 	}
@@ -223,7 +226,8 @@ func read_text() (string, error) {
 	if __r == 0 {
 		return "", fmt.Errorf("转换数据失败")
 	}
-	return string(out), nil
+	text := string(out)
+	return text, nil
 }
 
 func read_image() ([]byte, error) {

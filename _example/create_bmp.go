@@ -1,111 +1,35 @@
-// package main
-
-// import (
-// 	"bytes"
-// 	"encoding/binary"
-// 	"fmt"
-// 	"os"
-// )
-
-// // BMP 文件头结构
-// type BitmapFileHeader struct {
-// 	Type     [2]byte
-// 	Size     uint32
-// 	Reserved [2]uint16
-// 	Offset   uint32
-// }
-
-// // BMP 信息头结构
-// type BitmapInfoHeader struct {
-// 	Size            uint32
-// 	Width           int32
-// 	Height          int32
-// 	Planes          uint16
-// 	BitCount        uint16
-// 	Compression     uint32
-// 	SizeImage       uint32
-// 	XPelsPerMeter   uint32
-// 	YPelsPerMeter   uint32
-// 	ColorsUsed      uint32
-// 	ColorsImportant uint32
-// }
-
-// func main() {
-// 	// 初始化文件头
-// 	fileHeader := BitmapFileHeader{
-// 		Type:     [2]byte{'B', 'M'},
-// 		Size:     54 + 2*2*3, // 文件大小 = 头大小（54 字节）+ 像素数据大小
-// 		Reserved: [2]uint16{0, 0},
-// 		Offset:   54, // 像素数据偏移量
-// 	}
-
-// 	// 初始化信息头
-// 	infoHeader := BitmapInfoHeader{
-// 		Size:            40,
-// 		Width:           2,
-// 		Height:          2,
-// 		Planes:          1,
-// 		BitCount:        24,
-// 		Compression:     0,
-// 		SizeImage:       2 * 2 * 3,
-// 		XPelsPerMeter:   0,
-// 		YPelsPerMeter:   0,
-// 		ColorsUsed:      0,
-// 		ColorsImportant: 0,
-// 	}
-
-// 	// 像素数据，按照从下到上，从左到右的顺序排列
-// 	pixelData := [][]byte{
-// 		{227, 69, 22},
-// 		{239, 239, 239},
-// 		{227, 69, 22},
-// 		{239, 239, 239},
-// 	}
-
-// 	var pixelBytes bytes.Buffer
-// 	for i := len(pixelData) - 1; i >= 0; i-- {
-// 		pixelBytes.Write(pixelData[i])
-// 	}
-
-// 	// 创建文件
-// 	file, err := os.Create("2x2.bmp")
-// 	if err != nil {
-// 		fmt.Println("创建文件失败:", err)
-// 		return
-// 	}
-// 	defer file.Close()
-
-// 	// 写入文件头
-// 	err = binary.Write(file, binary.LittleEndian, &fileHeader)
-// 	if err != nil {
-// 		fmt.Println("写入文件头失败:", err)
-// 		return
-// 	}
-
-// 	// 写入信息头
-// 	err = binary.Write(file, binary.LittleEndian, &infoHeader)
-// 	if err != nil {
-// 		fmt.Println("写入信息头失败:", err)
-// 		return
-// 	}
-
-// 	// 写入像素数据
-// 	_, err = file.Write(pixelBytes.Bytes())
-// 	if err != nil {
-// 		fmt.Println("写入像素数据失败:", err)
-// 		return
-// 	}
-
-// 	fmt.Println("BMP 图片已创建并保存为 2x2.bmp")
-
-// }
-
 package main
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 )
+
+type BitmapFileHeader struct {
+	// bfType     uint16
+	// bfSize     uint32
+	// bfReserved uint16
+	// bfOffBits  uint32
+	bfType     [2]byte
+	bfSize     uint32
+	bfReserved [2]uint16
+	bfOffBits  uint32
+}
+
+type BitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
 
 // Pixel 表示一个像素点，包含坐标和RGB颜色
 type Pixel struct {
@@ -113,9 +37,7 @@ type Pixel struct {
 	R, G, B uint8
 }
 
-// CreateBMP 根据像素点列表创建BMP图片
-func CreateBMP(filename string, pixels []Pixel) error {
-	// 确定图像尺寸
+func CreateBMPBuffer(pixels []Pixel) []byte {
 	var width, height int
 	for _, p := range pixels {
 		if p.X+1 > width {
@@ -143,52 +65,57 @@ func CreateBMP(filename string, pixels []Pixel) error {
 	}
 
 	// 计算行字节数 (每行必须是4的倍数)
-	bytesPerRow := width * 3
-	padding := (4 - (bytesPerRow % 4)) % 4
-	bytesPerRow += padding
+	bytes_per_row := width * 4
+	// padding := (4 - (bytesPerRow % 4)) % 4
+	// bytesPerRow += padding
 
-	// 准备文件头 (14字节)
-	fileHeader := make([]byte, 14)
-	fileHeader[0] = 'B'
-	fileHeader[1] = 'M'
-	fileSize := 54 + bytesPerRow*height // 14+40 + 像素数据
-	binary.LittleEndian.PutUint32(fileHeader[2:6], uint32(fileSize))
-	binary.LittleEndian.PutUint32(fileHeader[10:14], 54) // 像素数据偏移量
-
-	// 准备DIB头 (40字节)
-	dibHeader := make([]byte, 40)
-	binary.LittleEndian.PutUint32(dibHeader[0:4], 40)
-	binary.LittleEndian.PutUint32(dibHeader[4:8], uint32(width))
-	binary.LittleEndian.PutUint32(dibHeader[8:12], uint32(height))
-	binary.LittleEndian.PutUint16(dibHeader[12:14], 1)
-	binary.LittleEndian.PutUint16(dibHeader[14:16], 24)
-	binary.LittleEndian.PutUint32(dibHeader[20:24], uint32(bytesPerRow*height))
-
-	// 创建文件
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
+	// 初始化文件头
+	fileHeader := BitmapFileHeader{
+		bfType:    [2]byte{'B', 'M'},
+		bfSize:    54 + uint32(bytes_per_row*height), // 不需要额外填充
+		bfOffBits: 54,
 	}
-	defer file.Close()
+
+	// 初始化信息头
+	infoHeader := BitmapInfoHeader{
+		Size:      40,
+		Width:     int32(width),
+		Height:    int32(height),
+		Planes:    1,
+		BitCount:  32, // 32位色深
+		SizeImage: uint32(bytes_per_row * height),
+	}
+	// 创建缓冲区
+	buffer := make([]byte, 0, fileHeader.bfSize)
 
 	// 写入文件头
-	file.Write(fileHeader)
-	// 写入DIB头
-	file.Write(dibHeader)
+	fileHeaderBytes := make([]byte, 14)
+	binary.LittleEndian.PutUint16(fileHeaderBytes[0:2], binary.LittleEndian.Uint16(fileHeader.bfType[:]))
+	binary.LittleEndian.PutUint32(fileHeaderBytes[2:6], fileHeader.bfSize)
+	binary.LittleEndian.PutUint32(fileHeaderBytes[10:14], fileHeader.bfOffBits)
+	buffer = append(buffer, fileHeaderBytes...)
+
+	// 写入信息头
+	infoHeaderBytes := make([]byte, 40)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[0:4], infoHeader.Size)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[4:8], uint32(infoHeader.Width))
+	binary.LittleEndian.PutUint32(infoHeaderBytes[8:12], uint32(infoHeader.Height))
+	binary.LittleEndian.PutUint16(infoHeaderBytes[12:14], infoHeader.Planes)
+	binary.LittleEndian.PutUint16(infoHeaderBytes[14:16], infoHeader.BitCount)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[20:24], infoHeader.SizeImage)
+	binary.LittleEndian.PutUint32(infoHeaderBytes[24:28], uint32(infoHeader.XPelsPerMeter))
+	binary.LittleEndian.PutUint32(infoHeaderBytes[28:32], uint32(infoHeader.YPelsPerMeter))
+	buffer = append(buffer, infoHeaderBytes...)
 
 	// 写入像素数据 (从下到上)
-	paddingBytes := make([]byte, padding)
 	for y := height - 1; y >= 0; y-- {
 		for x := 0; x < width; x++ {
-			file.Write(pixelMap[y][x])
-		}
-		// 写入行填充
-		if padding > 0 {
-			file.Write(paddingBytes)
+			pixel := pixelMap[y][x]
+			buffer = append(buffer, pixel[0], pixel[1], pixel[2], 0)
 		}
 	}
 
-	return nil
+	return buffer
 }
 
 func main() {
@@ -200,8 +127,13 @@ func main() {
 		{X: 1, Y: 1, R: 239, G: 239, B: 239}, // 右下角
 	}
 
-	err := CreateBMP("output.bmp", pixels)
+	buffer := CreateBMPBuffer(pixels)
+
+	file, err := os.Create("2x2.bmp")
 	if err != nil {
-		panic(err)
+		fmt.Println("create file failed,", err.Error())
+		return
 	}
+
+	file.Write(buffer)
 }

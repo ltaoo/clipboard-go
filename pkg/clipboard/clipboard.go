@@ -10,7 +10,6 @@ import (
 var (
 	err_unavailable = errors.New("clipboard unavailable")
 	err_unsupported = errors.New("unsupported format")
-	errNoCgo        = errors.New("clipboard: cannot use when CGO_ENABLED=0")
 )
 
 // Format represents the format of clipboard data.

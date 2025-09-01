@@ -828,6 +828,18 @@ func write_image(buf []byte) error {
 	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
+	// 检测 buf 文件类型，一律转换成 bmp 写入粘贴板
+	png_file, err := png.Decode(bytes.NewReader(buf))
+	if err != nil {
+		// fmt.Println(" :", err)
+		return fmt.Errorf("解码 Png 失败，%v", err.Error())
+	}
+	var bmp_buf bytes.Buffer
+	err = bmp.Encode(&bmp_buf, png_file)
+	if err != nil {
+		return fmt.Errorf("转换 bmp 失败，%v", err.Error())
+	}
+	buf = bmp_buf.Bytes()
 
 	// const FILE_HEADER_LENGTH = int(unsafe.Sizeof(BitmapFileHeader{}))
 	const FILE_HEADER_LENGTH = 14
