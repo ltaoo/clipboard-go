@@ -24,7 +24,7 @@ func main() {
 		}
 		files_path = append(files_path, file_path)
 	}
-	image_file_path := files_path[4]
+	image_file_path := files_path[0]
 	data, err := os.ReadFile(image_file_path)
 	if err != nil {
 		fmt.Println("打开文件失败:", err)
