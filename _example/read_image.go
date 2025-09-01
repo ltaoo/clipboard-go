@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"clipboard_t/pkg/clipboard"
-	"clipboard_t/pkg/util"
+	"github.com/ltaoo/clipboard-go"
+	"github.com/ltaoo/clipboard-go/pkg/util"
 )
 
 func main() {

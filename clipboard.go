@@ -129,6 +129,10 @@ func Watch(ctx context.Context) <-chan ClipboardContent {
 	return watch(ctx)
 }
 
+func GetTypes() []string {
+	return get_cur_types()
+}
+
 func ByteToStrArray(b []byte) ([]string, error) {
 	var strs []string
 	err := json.Unmarshal(b, &strs)

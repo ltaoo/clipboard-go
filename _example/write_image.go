@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"clipboard_t/pkg/clipboard"
+	"github.com/ltaoo/clipboard-go"
 )
 
 func main() {

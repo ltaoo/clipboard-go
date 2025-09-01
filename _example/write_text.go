@@ -1,8 +1,9 @@
 package main
 
 import (
-	"clipboard_t/pkg/clipboard"
 	"fmt"
+
+	"github.com/ltaoo/clipboard-go"
 )
 
 func main() {

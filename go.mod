@@ -1,4 +1,4 @@
-module clipboard_t
+module github.com/ltaoo/clipboard-go
 
 go 1.24
 

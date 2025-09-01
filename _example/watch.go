@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
-	"clipboard_t/pkg/clipboard"
-	"clipboard_t/pkg/util"
+	"github.com/ltaoo/clipboard-go"
+	"github.com/ltaoo/clipboard-go/pkg/util"
 )
 
 func main() {
 	ch := clipboard.Watch(context.TODO())
-	fmt.Println("开始监听粘贴板")
+	fmt.Println("Start watch the clipboard...")
 	for data := range ch {
 		fmt.Println(data.Type)
+		types := clipboard.GetTypes()
+		fmt.Println(types)
 		if data.Type == "public.file-url" {
 			if files, ok := data.Data.([]string); ok {
 				for _, f := range files {
