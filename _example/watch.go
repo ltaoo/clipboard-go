@@ -13,7 +13,7 @@ func main() {
 	fmt.Println("Start watch the clipboard...")
 	for data := range ch {
 		fmt.Println(data.Type)
-		types := clipboard.GetTypes()
+		types := clipboard.GetContentTypes()
 		fmt.Println(types)
 		if data.Type == "public.file-url" {
 			if files, ok := data.Data.([]string); ok {
