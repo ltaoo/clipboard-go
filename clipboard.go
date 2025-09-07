@@ -78,6 +78,15 @@ func ReadText() (string, error) {
 	}
 	return t, nil
 }
+func ReadHTML() (string, error) {
+	lock.Lock()
+	defer lock.Unlock()
+	t, err := read_html()
+	if err != nil {
+		return "", nil
+	}
+	return t, nil
+}
 func ReadImage() ([]byte, error) {
 	lock.Lock()
 	defer lock.Unlock()

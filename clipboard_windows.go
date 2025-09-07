@@ -57,12 +57,7 @@ const (
 	CF_PRIVATELAST     = 0x02FF
 )
 const (
-	cFmtBitmap      = 2 // Win+PrintScreen
-	cFmtDIB         = 8
-	cFmtUnicodeText = 13
-	cFmtFilepaths   = 15
-	cFmtDIBV5       = 17
-	CP_UTF8         = 65001
+	CP_UTF8 = 65001
 	// Screenshot taken from special shortcut is in different format (why??), see:
 	// https://jpsoft.com/forums/threads/detecting-clipboard-format.5225/
 	cFmtDataObject = 49161 // Shift+Win+s, returned from enumClipboardFormats
@@ -268,6 +263,7 @@ var (
 	// a valid clipboard format.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclipboardformata
 	registerClipboardFormatA = user32.MustFindProc("RegisterClipboardFormatA")
+	registerClipboardFormatW = user32.MustFindProc("RegisterClipboardFormatW")
 	// lstrcpyW                 = user32.MustFindProc("lstrcpyW")
 	getDC     = user32.MustFindProc("GetDC")
 	releaseDC = user32.MustFindProc("ReleaseDC")
@@ -313,13 +309,13 @@ func read(t Format) (buf []byte, err error) {
 	var format uintptr
 	switch t {
 	// case FmtImage:
-	// 	format = cFmtDIBV5
+	// 	format = CF_DIBV5
 	// case FmtFilepath:
-	// 	format = cFmtFilepaths
+	// 	format = CF_HDROP
 	// case FmtText:
 	// 	fallthrough
 	// default:
-	// 	format = cFmtUnicodeText
+	// 	format = CF_UNICODETEXT
 	}
 
 	// check if clipboard is avaliable for the requested format
@@ -339,11 +335,11 @@ func read(t Format) (buf []byte, err error) {
 	defer closeClipboard.Call()
 
 	switch format {
-	// case cFmtDIBV5:
+	// case CF_DIBV5:
 	// 	return readImage()
-	// case cFmtFilepaths:
+	// case CF_HDROP:
 	// 	return readFilepaths()
-	// case cFmtUnicodeText:
+	// case CF_UNICODETEXT:
 	// 	fallthrough
 	// default:
 	// 	return readText()
@@ -388,7 +384,7 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 		// case FmtText:
 		// 	fallthrough
 		// default:
-		// 	// param = cFmtUnicodeText
+		// 	// param = CF_UNICODETEXT
 		// 	err := write_text(buf)
 		// 	if err != nil {
 		// 		errch <- err
@@ -507,7 +503,7 @@ func read_content_with_type() ClipboardContent {
 func read_text() (text string, err error) {
 	open_clipboard()
 	defer close_clipboard()
-	hMem, _, err := getClipboardData.Call(cFmtUnicodeText)
+	hMem, _, err := getClipboardData.Call(CF_UNICODETEXT)
 	if hMem == 0 {
 		return "", err
 	}
@@ -531,10 +527,32 @@ func read_text() (text string, err error) {
 	return string(utf16.Decode(s)), nil
 }
 
+func read_html() (text string, err error) {
+	open_clipboard()
+	defer close_clipboard()
+	r := register_clipboard_format("HTML Format")
+	ret, _, _ := isClipboardFormatAvailable.Call(r)
+	if ret == 0 {
+		return "", fmt.Errorf("clipboard format not available")
+	}
+	hMem, _, err := getClipboardData.Call(r)
+	if hMem == 0 {
+		return "", err
+	}
+	ptr, _, err := gLock.Call(hMem)
+	if ptr == 0 {
+		return "", err
+	}
+	defer gUnlock.Call(hMem)
+	// 转换为 Go 字符串
+	data := byte_ptr_to_string((*byte)(unsafe.Pointer(ptr)))
+	return data, nil
+}
+
 func read_image() ([]byte, error) {
 	open_clipboard()
 	defer close_clipboard()
-	hMem, _, err := getClipboardData.Call(cFmtBitmap)
+	hMem, _, err := getClipboardData.Call(CF_BITMAP)
 	if hMem == 0 {
 		return nil, fmt.Errorf("找不到数据")
 	}
@@ -629,7 +647,7 @@ func read_image() ([]byte, error) {
 func read_image_dib() ([]byte, error) {
 	open_clipboard()
 	defer close_clipboard()
-	hMem, _, _ := getClipboardData.Call(cFmtDIB)
+	hMem, _, _ := getClipboardData.Call(CF_DIB)
 	if hMem != 0 {
 		return nil, fmt.Errorf("not dib format data")
 	}
@@ -664,7 +682,7 @@ func read_image_dib() ([]byte, error) {
 func read_files() ([]string, error) {
 	open_clipboard()
 	defer close_clipboard()
-	hMem, _, err := getClipboardData.Call(cFmtFilepaths)
+	hMem, _, err := getClipboardData.Call(CF_HDROP)
 	if hMem == 0 {
 		// fmt.Println("f1", err.Error())
 		return nil, err
@@ -750,7 +768,7 @@ func write_text(text string) error {
 
 	memMove.Call(p, uintptr(unsafe.Pointer(&s[0])), uintptr(len(s)*int(unsafe.Sizeof(s[0]))))
 
-	v, _, err := setClipboardData.Call(cFmtUnicodeText, hMem)
+	v, _, err := setClipboardData.Call(CF_UNICODETEXT, hMem)
 	if v == 0 {
 		gFree.Call(hMem)
 		return fmt.Errorf("failed to set text to clipboard: %w", err)
@@ -1029,6 +1047,12 @@ func close_clipboard() {
 	closeClipboard.Call()
 }
 
+func register_clipboard_format(format string) uintptr {
+	ptr, _ := syscall.UTF16PtrFromString(format)
+	ret, _, _ := registerClipboardFormatW.Call(uintptr(unsafe.Pointer(ptr)))
+	return ret
+}
+
 func bmp_to_png(bmpBuf *bytes.Buffer) (buf []byte, err error) {
 	var f bytes.Buffer
 	original_image, err := bmp.Decode(bmpBuf)
@@ -1046,4 +1070,18 @@ func byte_slice_to_string_slice(b []byte) ([]string, error) {
 	var strs []string
 	err := json.Unmarshal(b, &strs)
 	return strs, err
+}
+
+func byte_ptr_to_string(ptr *byte) string {
+	if ptr == nil {
+		return ""
+	}
+	var length int
+	for {
+		if *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + uintptr(length))) == 0 {
+			break
+		}
+		length++
+	}
+	return string((*[1 << 20]byte)(unsafe.Pointer(ptr))[:length:length])
 }
