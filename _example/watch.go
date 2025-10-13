@@ -13,16 +13,15 @@ func main() {
 	fmt.Println("Start watch the clipboard...")
 	for data := range ch {
 		fmt.Println(data.Type)
-		types := clipboard.GetContentTypes()
-		fmt.Println(types)
-		if data.Type == "public.file-url" {
-			if files, ok := data.Data.([]string); ok {
-				for _, f := range files {
-					fmt.Println(f)
-				}
+		// types := clipboard.GetContentTypes()
+		// fmt.Println(types)
+
+		if data.Type == "public.utf8-plain-text" {
+			if text, ok := data.Data.(string); ok {
+				fmt.Println(text)
 			}
 		}
-		if data.Type == "public.utf8-plain-text" {
+		if data.Type == "public.html" {
 			if text, ok := data.Data.(string); ok {
 				fmt.Println(text)
 			}
@@ -32,6 +31,13 @@ func main() {
 				img_filepath, err := util.SaveByteAsLocalImage(f)
 				if err == nil {
 					fmt.Println("the image save to", img_filepath)
+				}
+			}
+		}
+		if data.Type == "public.file-url" {
+			if files, ok := data.Data.([]string); ok {
+				for _, f := range files {
+					fmt.Println(f)
 				}
 			}
 		}
