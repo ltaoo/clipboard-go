@@ -796,6 +796,10 @@ func write_text(text string) error {
 	return nil
 }
 
+func write_html(text string) error {
+	return write_text(text)
+}
+
 func write_image(image_bytes []byte) error {
 	open_clipboard()
 	defer close_clipboard()

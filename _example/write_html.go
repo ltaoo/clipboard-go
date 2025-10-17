@@ -1,0 +1,30 @@
+package main
+
+import (
+	"fmt"
+
+	"github.com/ltaoo/clipboard-go"
+)
+
+func main() {
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		return
+	}
+	err = clipboard.WriteHTML("<span style=\"color:red;font-size:28px;\">Hello</span>")
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		return
+	}
+	fmt.Println("写入成功")
+	// 默认就能写入成功？
+	// if changed != nil {
+	// 	<-r
+	// 	fmt.Printf("写入成功")
+	// }
+	// select {
+	// case <-changed:
+	// 	println(`"text data" is no longer available from clipboard.`)
+	// }
+}
