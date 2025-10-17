@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image/png"
 
 	"github.com/ltaoo/clipboard-go"
 	"github.com/ltaoo/clipboard-go/pkg/util"
@@ -25,5 +27,12 @@ func main() {
 		return
 	}
 	fmt.Printf("粘贴板中的图片已成功保存到本地\n")
-	fmt.Printf(absPath)
+	fmt.Println(absPath)
+	reader := bytes.NewReader(data)
+	info, err := png.DecodeConfig(reader)
+	if err != nil {
+		fmt.Println("failed to decode PNG info")
+		return
+	}
+	fmt.Printf("the image width is %v, height is %v \n", info.Width, info.Height)
 }

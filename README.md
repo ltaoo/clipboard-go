@@ -4,6 +4,8 @@
 
 ### Read text
 
+[_example/read_text.go](./_example/read_text.go)
+
 ```golang
 package main
 
@@ -30,7 +32,56 @@ func main() {
 }
 ```
 
+### Read html
+
+[_example/read_html.go](./_example/read_html.go)
+
+
+### Read image
+
+[_example/read_text.go](./_example/read_text.go)
+
+```golang
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"image/png"
+	"log"
+
+	"github.com/ltaoo/clipboard-go"
+)
+
+func main() {
+	fmt.Println("正在读取剪贴板图片...")
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Printf("初始化剪贴板失败: %v\n", err)
+		return
+	}
+	image_bytes, err := clipboard.ReadImage()
+	if err != nil {
+		fmt.Println("读取文件失败", err.Error())
+		return
+	}
+	if len(image_bytes) == 0 {
+		fmt.Println("剪贴板中没有图片数据")
+		return
+	}
+	reader := bytes.NewReader(image_bytes)
+	info, err := png.DecodeConfig(reader)
+	if err != nil {
+		fmt.Println("failed to decode PNG info")
+		return 
+	}
+	return info.Width, info.Height, nil
+}
+```
+
 ### Read files
+
+[_example/read_file.go](./_example/read_file.go)
 
 ```golang
 package main
@@ -64,6 +115,24 @@ func main() {
 }
 ```
 
+## Write content to Clipboard
+
+### Write text
+
+[_example/write_text.go](./_example/write_text.go)
+
+### Write html
+
+[_example/write_html.go](./_example/write_html.go)
+
+### Write image
+
+[_example/write_image.go](./_example/write_image.go)
+
+### Write file
+
+[_example/write_file.go](./_example/write_file.go)
+
 ## Watch the clipboard
 
 ```golang
@@ -92,6 +161,11 @@ func main() {
 		if data.Type == "public.utf8-plain-text" {
 			if text, ok := data.Data.(string); ok {
 				fmt.Println(text)
+			}
+		}
+		if data.Type == "public.html" {
+			if html, ok := data.Data.(string); ok {
+				fmt.Println(html)
 			}
 		}
 		if data.Type == "public.png" {
