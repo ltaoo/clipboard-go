@@ -25,9 +25,10 @@ const (
 )
 
 type ClipboardContent struct {
-	Type  string // text纯文本 file文件 png图片 html富文本
-	Data  interface{}
-	Error error
+	Type       string // public.utf8-plain-text纯文本 public.file-url文件 public.png图片 public.html富文本
+	Data       interface{}
+	BackupData interface{}
+	Error      error
 }
 
 var (

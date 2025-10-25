@@ -163,14 +163,18 @@ func read_content_with_type(params ContentTypeParams) ClipboardContent {
 	for _, t := range cur_types {
 		if t == "public.html" {
 			maybe_type = t
-			text, err := read_html()
+			html, err := read_html()
 			d := ClipboardContent{
 				Type:  maybe_type,
-				Data:  text,
+				Data:  html,
 				Error: nil,
 			}
 			if err != nil {
 				d.Error = fmt.Errorf("读取类型为 %v 的内容时失败，因为%v", maybe_type, err.Error())
+			}
+			text, err := read_text()
+			if err != nil {
+				d.BackupData = text
 			}
 			return d
 		}
