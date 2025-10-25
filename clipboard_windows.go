@@ -228,7 +228,7 @@ var (
 	// Opens the clipboard for examination and prevents other
 	// applications from modifying the clipboard content.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard
-	_openClipboard = user32.MustFindProc("OpenClipboard")
+	openClipboard = user32.MustFindProc("OpenClipboard")
 	// Closes the clipboard.
 	// https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closeclipboard
 	closeClipboard = user32.MustFindProc("CloseClipboard")
@@ -329,7 +329,7 @@ func read(t Format) (buf []byte, err error) {
 
 	// try again until open clipboard successed
 	for {
-		r, _, _ = _openClipboard.Call()
+		r, _, _ = openClipboard.Call()
 		if r == 0 {
 			continue
 		}
@@ -361,7 +361,7 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		for {
-			r, _, _ := _openClipboard.Call(0)
+			r, _, _ := openClipboard.Call(0)
 			if r == 0 {
 				continue
 			}
@@ -549,12 +549,15 @@ func read_text() (text string, err error) {
 func read_html() (text string, err error) {
 	open_clipboard()
 	defer close_clipboard()
-	r := register_clipboard_format("HTML Format")
-	ret, _, _ := isClipboardFormatAvailable.Call(r)
+	cf_html_format, err := register_clipboard_format("HTML Format")
+	if err != nil {
+		return "", err
+	}
+	ret, _, _ := isClipboardFormatAvailable.Call(cf_html_format)
 	if ret == 0 {
 		return "", fmt.Errorf("clipboard format not available")
 	}
-	hMem, _, err := getClipboardData.Call(r)
+	hMem, _, err := getClipboardData.Call(cf_html_format)
 	if hMem == 0 {
 		return "", err
 	}
@@ -796,8 +799,142 @@ func write_text(text string) error {
 	return nil
 }
 
-func write_html(text string) error {
-	return write_text(text)
+func write_html(html string) error {
+	// htmlData, err := os.ReadFile("./powershell/debug_clipboard.html")
+	// data := make([]byte, len(htmlData)+1)
+	// copy(data, htmlData)
+	// data[len(htmlData)] = 0 // 添加null终止符
+	// if err != nil {
+	// 	return fmt.Errorf("无法读取文件")
+	// }
+	// // 注册HTML格式
+	// formatName := "HTML Format"
+	// formatPtr, _, err := registerClipboardFormatA.Call(uintptr(unsafe.Pointer(syscall.StringBytePtr(formatName))))
+	// if formatPtr == 0 {
+	// 	return fmt.Errorf("注册格式错误")
+	// }
+	// // 打开剪贴板
+	// ret, _, err := openClipboard.Call(0)
+	// if ret == 0 {
+	// 	return fmt.Errorf("无法打开贴板")
+	// }
+	// // 清空剪贴板
+	// ret, _, err = emptyClipboard.Call()
+	// if ret == 0 {
+	// 	closeClipboard.Call()
+	// 	return fmt.Errorf("无法清空剪贴板")
+	// }
+	// // 分配全局内存
+	// size := uintptr(len(data) + 1)
+	// hMem, _, err := gAlloc.Call(0x0002, size) // GMEM_MOVEABLE = 0x0002
+	// if hMem == 0 {
+	// 	closeClipboard.Call()
+	// 	// log.Fatalf("内存分配失败: %v", err)
+	// 	return fmt.Errorf("内存分配失败")
+	// }
+
+	// // 锁定内存
+	// pMem, _, err := gLock.Call(hMem)
+	// if pMem == 0 {
+	// 	gFree.Call(hMem)
+	// 	closeClipboard.Call()
+	// 	// log.Fatalf("无法锁定内存: %v", err)
+	// 	return fmt.Errorf("无法锁定内存")
+	// }
+	// // 复制数据
+	// copy((*[1 << 30]byte)(unsafe.Pointer(pMem))[:len(data)], data)
+	// // 解锁内存
+	// gLock.Call(hMem)
+	// // 设置剪贴板数据
+	// ret, _, err = setClipboardData.Call(formatPtr, hMem)
+	// if ret == 0 {
+	// 	gFree.Call(hMem)
+	// 	closeClipboard.Call()
+	// 	// log.Fatalf("无法设置剪贴板数据: %v", err)
+	// 	return err
+	// }
+	// closeClipboard.Call()
+	// fmt.Println("HTML格式数据已成功写入剪贴板")
+	// return nil
+
+	// if html == "" {
+	// 	return fmt.Errorf("The html is empty")
+	// }
+
+	// html_byte, err := os.ReadFile("./powershell/debug_clipboard.html")
+	// if err != nil {
+	// 	return err
+	// }
+	// full_html := string(content)
+
+	header := "Version:0.9\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n"
+	start_html := len(header)
+	start_fragment := start_html + 24 // <html>\r\n<body>\r\n<!--StartFragment-->
+	end_fragment := start_fragment + len(html)
+	end_html := end_fragment + 13 // <!--EndFragment-->\r\n</body>\r\n</html>
+	header = fmt.Sprintf("Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\nStartFragment:%010d\r\nEndFragment:%010d\r\n",
+		start_html, end_html, start_fragment, end_fragment)
+	full_html := header + "<html>\r\n<body>\r\n<!--StartFragment-->" + html + "<!--EndFragment-->\r\n</body>\r\n</html>"
+
+	html_byte := []byte(full_html)
+	data := make([]byte, len(html_byte)+1)
+	copy(data, html_byte)
+	data[len(html_byte)] = 0
+
+	open_clipboard()
+	defer close_clipboard()
+	r, _, err := emptyClipboard.Call()
+	if r == 0 {
+		return fmt.Errorf("failed to clear clipboard: %w", err)
+	}
+	fmt.Println("[Debug] Registering HTML format...")
+	cf_html_format, err := register_clipboard_format2("HTML Format")
+	if err != nil {
+		return fmt.Errorf("failed to register clipboard format: %v", err)
+	}
+	// fmt.Printf("[Debug] HTML format ID: %d\n", cf_html_format)
+
+	// header_template := "Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\nStartFragment:%010d\r\nEndFragment:%010d\r\n"
+	// html_prefix := "<html>\r\n<body>\r\n<!--StartFragment-->"
+	// html_suffix := "<!--EndFragment-->\r\n</body>\r\n</html>"
+	// start_html := len(fmt.Sprintf(header_template, 0, 0, 0, 0))
+	// start_fragment := start_html + len(html_prefix)
+	// end_fragment := start_fragment + len(html)
+	// end_HTML := end_fragment + len(html_suffix)
+	// header := fmt.Sprintf(header_template, start_html, end_HTML, start_fragment, end_fragment)
+	// full_html := header + html_prefix + html + html_suffix
+
+	// fmt.Printf("[Debug] Generated HTML:\n%s\n", full_html)
+
+	// s, err := syscall.UTF16FromString(full_html)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to convert given string: %w", err)
+	// }
+	// size := uintptr((len(s) + 1) * int(unsafe.Sizeof(s[0])))
+	size := uintptr(len(data) + 1)
+	fmt.Printf("[Debug] Allocating memory, size: %d\n", size)
+	h_mem, _, err := gAlloc.Call(gmemMoveable, size)
+	if h_mem == 0 {
+		return fmt.Errorf("failed to alloc global memory: %w", err)
+	}
+	p_mem, _, err := gLock.Call(h_mem)
+	if p_mem == 0 {
+		gFree.Call(h_mem)
+		return fmt.Errorf("failed to lock global memory: %w", err)
+	}
+	// memMove.Call(p_mem, uintptr(unsafe.Pointer(&s[0])), size)
+	copy((*[1 << 30]byte)(unsafe.Pointer(p_mem))[:len(data)], data)
+	gUnlock.Call(h_mem)
+	fmt.Println("[Debug] Setting clipboard data...")
+	v, _, err := setClipboardData.Call(cf_html_format, h_mem)
+	if v == 0 {
+		gFree.Call(h_mem)
+		return fmt.Errorf("failed to set text to clipboard: %w", err)
+	}
+	setClipboardData.Call(CF_UNICODETEXT, h_mem)
+	close_clipboard()
+	fmt.Println("[Debug] Clipboard operation completed successfully")
+	return nil
 }
 
 func write_image(image_bytes []byte) error {
@@ -1156,7 +1293,7 @@ func get_content_types(params ContentTypeParams) []string {
 }
 func open_clipboard() {
 	for {
-		r, _, _ := _openClipboard.Call()
+		r, _, _ := openClipboard.Call()
 		if r == 0 {
 			continue
 		}
@@ -1167,10 +1304,20 @@ func close_clipboard() {
 	closeClipboard.Call()
 }
 
-func register_clipboard_format(format string) uintptr {
+func register_clipboard_format(format string) (uintptr, error) {
 	ptr, _ := syscall.UTF16PtrFromString(format)
-	ret, _, _ := registerClipboardFormatW.Call(uintptr(unsafe.Pointer(ptr)))
-	return ret
+	ret, _, err := registerClipboardFormatW.Call(uintptr(unsafe.Pointer(ptr)))
+	if ret == 0 {
+		return 0, fmt.Errorf("failed to register clipboard format: %v", err)
+	}
+	return ret, nil
+}
+func register_clipboard_format2(format string) (uintptr, error) {
+	ret, _, err := registerClipboardFormatA.Call(uintptr(unsafe.Pointer(syscall.StringBytePtr(format))))
+	if ret == 0 {
+		return 0, fmt.Errorf("failed to register clipboard format: %v", err)
+	}
+	return ret, nil
 }
 
 func bmp_to_png(bmpBuf *bytes.Buffer) (buf []byte, err error) {

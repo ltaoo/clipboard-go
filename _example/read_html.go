@@ -19,5 +19,6 @@ func main() {
 		return
 	}
 	fmt.Printf("粘贴板中的文本\n")
-	fmt.Printf(text)
+	// fmt.Println(len([]byte(text)))
+	fmt.Println(text)
 }
