@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ltaoo/clipboard-go"
+	"github.com/ltaoo/clipboard-go/pkg/parser"
 )
 
 func main() {
@@ -19,6 +20,7 @@ func main() {
 		return
 	}
 	fmt.Printf("粘贴板中的文本\n")
-	// fmt.Println(len([]byte(text)))
-	fmt.Println(text)
+	r := parser.ParseHTMLContent(text)
+	fmt.Println(r.SourceURL)
+	fmt.Println(r.HTMLContent)
 }
