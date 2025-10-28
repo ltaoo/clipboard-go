@@ -1,5 +1,36 @@
 # clipboard-go
 
+Simple, cross-platform clipboard utilities for Go. Read/write text, HTML, images (PNG), and file paths; watch for changes.
+
+## Quick Start
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ltaoo/clipboard-go"
+)
+
+func main() {
+	if err := clipboard.Init(); err != nil {
+		panic(err)
+	}
+
+	// Write & read text
+	_ = clipboard.WriteText("hello")
+	text, _ := clipboard.ReadText()
+	fmt.Println(text)
+}
+```
+
+Install:
+
+```bash
+go get github.com/ltaoo/clipboard-go
+```
+
 ## Get the content of Clipboard
 
 ### Read text
