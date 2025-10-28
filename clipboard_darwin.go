@@ -306,19 +306,11 @@ func read_files() ([]string, error) {
 	return files, nil
 }
 
-func write_text(text string) error {
+func direct_write_text(text string, __pasteboard objc.ID) error {
 	bytes := []byte(text)
-	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
-	if __pasteboard == 0 {
-		return fmt.Errorf("获取粘贴板失败")
-	}
 	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
 	if __data == 0 {
 		return fmt.Errorf("初始化数据失败")
-	}
-	__r := __pasteboard.Send(_clearContents)
-	if __r == 0 {
-		return fmt.Errorf("清空粘贴板失败")
 	}
 	__r2 := __pasteboard.Send(_setDataForType, __data, _NSPasteboardTypeString)
 	if __r2 == 0 {
@@ -327,39 +319,52 @@ func write_text(text string) error {
 	return nil
 }
 
-func write_html(text string) error {
-	bytes := []byte(text)
+func write_text(text string) error {
 	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
 	if __pasteboard == 0 {
 		return fmt.Errorf("获取粘贴板失败")
-	}
-	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
-	if __data == 0 {
-		return fmt.Errorf("初始化数据失败")
 	}
 	__r := __pasteboard.Send(_clearContents)
 	if __r == 0 {
 		return fmt.Errorf("清空粘贴板失败")
 	}
+	return direct_write_text(text, __pasteboard)
+}
+
+func direct_write_html(html string, __pasteboard objc.ID) error {
+	html_bytes := []byte(html)
+	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(html_bytes), len(html_bytes))
+	if __data == 0 {
+		return fmt.Errorf("初始化数据失败")
+	}
 	__r2 := __pasteboard.Send(_setDataForType, __data, _NSPasteboardTypeHTML)
 	if __r2 == 0 {
-		return fmt.Errorf("写入文本失败")
+		return fmt.Errorf("写入HTML失败")
 	}
 	return nil
 }
 
-func write_image(bytes []byte) error {
+func write_html(html string, text *string) error {
 	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
 	if __pasteboard == 0 {
 		return fmt.Errorf("获取粘贴板失败")
 	}
-	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(bytes), len(bytes))
-	if __data == 0 {
-		return fmt.Errorf("初始化数据失败")
-	}
 	__r := __pasteboard.Send(_clearContents)
 	if __r == 0 {
 		return fmt.Errorf("清空粘贴板失败")
+	}
+	err := direct_write_html(html, __pasteboard)
+	if text == nil {
+		text = &html
+	}
+	direct_write_text(*text, __pasteboard)
+	return err
+}
+
+func direct_write_image(image_bytes []byte, __pasteboard objc.ID) error {
+	__data := objc.ID(_NSData).Send(_dataWithBytesLength, unsafe.SliceData(image_bytes), len(image_bytes))
+	if __data == 0 {
+		return fmt.Errorf("初始化数据失败")
 	}
 	__r2 := __pasteboard.Send(_setDataForType, __data, _NSPasteboardTypePNG)
 	if __r2 == 0 {
@@ -368,7 +373,19 @@ func write_image(bytes []byte) error {
 	return nil
 }
 
-func write_files(files []string) error {
+func write_image(image_bytes []byte) error {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	if __pasteboard == 0 {
+		return fmt.Errorf("获取粘贴板失败")
+	}
+	__r := __pasteboard.Send(_clearContents)
+	if __r == 0 {
+		return fmt.Errorf("清空粘贴板失败")
+	}
+	return direct_write_image(image_bytes, __pasteboard)
+}
+
+func direct_write_files(files []string, __pasteboard objc.ID) error {
 	__arr := objc.ID(_NSMutableArray).Send(_alloc).Send(_init)
 	if __arr == 0 {
 		return fmt.Errorf("初始化失败")
@@ -380,14 +397,6 @@ func write_files(files []string) error {
 		__arr.Send(_addObject, __file_url)
 	}
 
-	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
-	if __pasteboard == 0 {
-		return fmt.Errorf("获取粘贴板失败")
-	}
-	__r := __pasteboard.Send(_clearContents)
-	if __r == 0 {
-		return fmt.Errorf("清空粘贴板失败")
-	}
 	__r2 := __pasteboard.Send(_writeObjects, __arr)
 	if __r2 == 0 {
 		return fmt.Errorf("写入文件失败")
@@ -397,6 +406,18 @@ func write_files(files []string) error {
 		return fmt.Errorf("写入文件失败2")
 	}
 	return nil
+}
+
+func write_files(files []string) error {
+	__pasteboard := objc.ID(_NSPasteboard).Send(_generalPasteboard)
+	if __pasteboard == 0 {
+		return fmt.Errorf("获取粘贴板失败")
+	}
+	__r := __pasteboard.Send(_clearContents)
+	if __r == 0 {
+		return fmt.Errorf("清空粘贴板失败")
+	}
+	return direct_write_files(files, __pasteboard)
 }
 
 func get_change_count() int {

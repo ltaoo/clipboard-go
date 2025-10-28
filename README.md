@@ -180,6 +180,22 @@ func main() {
 }
 ```
 
+## Publish
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+or
+
+```bash
+git add .
+git commit -m "feat: update documentation"
+git tag v0.2.0
+git push origin main --tags
+```
+
 ## Acknowledgments
 
 This project was inspired by and references several excellent open-source clipboard libraries. Special thanks to:

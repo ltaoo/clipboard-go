@@ -120,10 +120,14 @@ func WriteText(text string) error {
 	defer lock.Unlock()
 	return write_text(text)
 }
-func WriteHTML(text string) error {
+func WriteHTML(html string, args ...string) error {
 	lock.Lock()
 	defer lock.Unlock()
-	return write_html(text)
+	var text *string
+	if len(args) > 0 {
+		text = &args[0]
+	}
+	return write_html(html, text)
 }
 func WriteImage(data []byte) error {
 	lock.Lock()

@@ -759,6 +759,29 @@ func read_files() ([]string, error) {
 	// return []byte(joinedPaths), nil
 }
 
+func direct_write_text(text string) error {
+	s, err := syscall.UTF16FromString(text)
+	if err != nil {
+		return fmt.Errorf("failed to convert given string: %w", err)
+	}
+	hMem, _, err := gAlloc.Call(gmemMoveable, uintptr(len(s)*int(unsafe.Sizeof(s[0]))))
+	if hMem == 0 {
+		return fmt.Errorf("failed to alloc global memory: %w", err)
+	}
+	p, _, err := gLock.Call(hMem)
+	if p == 0 {
+		return fmt.Errorf("failed to lock global memory: %w", err)
+	}
+	defer gUnlock.Call(hMem)
+	memMove.Call(p, uintptr(unsafe.Pointer(&s[0])), uintptr(len(s)*int(unsafe.Sizeof(s[0]))))
+	v, _, err := setClipboardData.Call(CF_UNICODETEXT, hMem)
+	if v == 0 {
+		gFree.Call(hMem)
+		return fmt.Errorf("failed to set text to clipboard: %w", err)
+	}
+	return nil
+}
+
 // write_text writes given data to the clipboard. It is the caller's
 // responsibility for opening/closing the clipboard before calling
 // this function.
@@ -772,101 +795,10 @@ func write_text(text string) error {
 	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
-	s, err := syscall.UTF16FromString(text)
-	if err != nil {
-		return fmt.Errorf("failed to convert given string: %w", err)
-	}
-
-	hMem, _, err := gAlloc.Call(gmemMoveable, uintptr(len(s)*int(unsafe.Sizeof(s[0]))))
-	if hMem == 0 {
-		return fmt.Errorf("failed to alloc global memory: %w", err)
-	}
-
-	p, _, err := gLock.Call(hMem)
-	if p == 0 {
-		return fmt.Errorf("failed to lock global memory: %w", err)
-	}
-	defer gUnlock.Call(hMem)
-
-	memMove.Call(p, uintptr(unsafe.Pointer(&s[0])), uintptr(len(s)*int(unsafe.Sizeof(s[0]))))
-
-	v, _, err := setClipboardData.Call(CF_UNICODETEXT, hMem)
-	if v == 0 {
-		gFree.Call(hMem)
-		return fmt.Errorf("failed to set text to clipboard: %w", err)
-	}
-
-	return nil
+	return direct_write_text(text)
 }
 
-func write_html(html string) error {
-	// htmlData, err := os.ReadFile("./powershell/debug_clipboard.html")
-	// data := make([]byte, len(htmlData)+1)
-	// copy(data, htmlData)
-	// data[len(htmlData)] = 0 // 添加null终止符
-	// if err != nil {
-	// 	return fmt.Errorf("无法读取文件")
-	// }
-	// // 注册HTML格式
-	// formatName := "HTML Format"
-	// formatPtr, _, err := registerClipboardFormatA.Call(uintptr(unsafe.Pointer(syscall.StringBytePtr(formatName))))
-	// if formatPtr == 0 {
-	// 	return fmt.Errorf("注册格式错误")
-	// }
-	// // 打开剪贴板
-	// ret, _, err := openClipboard.Call(0)
-	// if ret == 0 {
-	// 	return fmt.Errorf("无法打开贴板")
-	// }
-	// // 清空剪贴板
-	// ret, _, err = emptyClipboard.Call()
-	// if ret == 0 {
-	// 	closeClipboard.Call()
-	// 	return fmt.Errorf("无法清空剪贴板")
-	// }
-	// // 分配全局内存
-	// size := uintptr(len(data) + 1)
-	// hMem, _, err := gAlloc.Call(0x0002, size) // GMEM_MOVEABLE = 0x0002
-	// if hMem == 0 {
-	// 	closeClipboard.Call()
-	// 	// log.Fatalf("内存分配失败: %v", err)
-	// 	return fmt.Errorf("内存分配失败")
-	// }
-
-	// // 锁定内存
-	// pMem, _, err := gLock.Call(hMem)
-	// if pMem == 0 {
-	// 	gFree.Call(hMem)
-	// 	closeClipboard.Call()
-	// 	// log.Fatalf("无法锁定内存: %v", err)
-	// 	return fmt.Errorf("无法锁定内存")
-	// }
-	// // 复制数据
-	// copy((*[1 << 30]byte)(unsafe.Pointer(pMem))[:len(data)], data)
-	// // 解锁内存
-	// gLock.Call(hMem)
-	// // 设置剪贴板数据
-	// ret, _, err = setClipboardData.Call(formatPtr, hMem)
-	// if ret == 0 {
-	// 	gFree.Call(hMem)
-	// 	closeClipboard.Call()
-	// 	// log.Fatalf("无法设置剪贴板数据: %v", err)
-	// 	return err
-	// }
-	// closeClipboard.Call()
-	// fmt.Println("HTML格式数据已成功写入剪贴板")
-	// return nil
-
-	// if html == "" {
-	// 	return fmt.Errorf("The html is empty")
-	// }
-
-	// html_byte, err := os.ReadFile("./powershell/debug_clipboard.html")
-	// if err != nil {
-	// 	return err
-	// }
-	// full_html := string(content)
-
+func direct_write_html(html string) error {
 	header := "Version:0.9\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n"
 	start_html := len(header)
 	start_fragment := start_html + 24 // <html>\r\n<body>\r\n<!--StartFragment-->
@@ -880,39 +812,12 @@ func write_html(html string) error {
 	data := make([]byte, len(html_byte)+1)
 	copy(data, html_byte)
 	data[len(html_byte)] = 0
-
-	open_clipboard()
-	defer close_clipboard()
-	r, _, err := emptyClipboard.Call()
-	if r == 0 {
-		return fmt.Errorf("failed to clear clipboard: %w", err)
-	}
-	fmt.Println("[Debug] Registering HTML format...")
 	cf_html_format, err := register_clipboard_format2("HTML Format")
 	if err != nil {
 		return fmt.Errorf("failed to register clipboard format: %v", err)
 	}
-	// fmt.Printf("[Debug] HTML format ID: %d\n", cf_html_format)
-
-	// header_template := "Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\nStartFragment:%010d\r\nEndFragment:%010d\r\n"
-	// html_prefix := "<html>\r\n<body>\r\n<!--StartFragment-->"
-	// html_suffix := "<!--EndFragment-->\r\n</body>\r\n</html>"
-	// start_html := len(fmt.Sprintf(header_template, 0, 0, 0, 0))
-	// start_fragment := start_html + len(html_prefix)
-	// end_fragment := start_fragment + len(html)
-	// end_HTML := end_fragment + len(html_suffix)
-	// header := fmt.Sprintf(header_template, start_html, end_HTML, start_fragment, end_fragment)
-	// full_html := header + html_prefix + html + html_suffix
-
-	// fmt.Printf("[Debug] Generated HTML:\n%s\n", full_html)
-
-	// s, err := syscall.UTF16FromString(full_html)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to convert given string: %w", err)
-	// }
-	// size := uintptr((len(s) + 1) * int(unsafe.Sizeof(s[0])))
 	size := uintptr(len(data) + 1)
-	fmt.Printf("[Debug] Allocating memory, size: %d\n", size)
+	// fmt.Printf("[Debug] Allocating memory, size: %d\n", size)
 	h_mem, _, err := gAlloc.Call(gmemMoveable, size)
 	if h_mem == 0 {
 		return fmt.Errorf("failed to alloc global memory: %w", err)
@@ -925,30 +830,36 @@ func write_html(html string) error {
 	// memMove.Call(p_mem, uintptr(unsafe.Pointer(&s[0])), size)
 	copy((*[1 << 30]byte)(unsafe.Pointer(p_mem))[:len(data)], data)
 	gUnlock.Call(h_mem)
-	fmt.Println("[Debug] Setting clipboard data...")
+	// fmt.Println("[Debug] Setting clipboard data...")
 	v, _, err := setClipboardData.Call(cf_html_format, h_mem)
 	if v == 0 {
 		gFree.Call(h_mem)
 		return fmt.Errorf("failed to set text to clipboard: %w", err)
 	}
-	setClipboardData.Call(CF_UNICODETEXT, h_mem)
-	close_clipboard()
-	fmt.Println("[Debug] Clipboard operation completed successfully")
 	return nil
 }
-
-func write_image(image_bytes []byte) error {
+func write_html(html string, text *string) error {
 	open_clipboard()
 	defer close_clipboard()
 	r, _, err := emptyClipboard.Call()
 	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
+	direct_write_html(html)
+	if text == nil {
+		text = &html
+	}
+	direct_write_text(*text)
+	close_clipboard()
+	fmt.Println("[Debug] Clipboard operation completed successfully")
+	return nil
+}
+
+func direct_write_image(image_bytes []byte) error {
 	mimetype := http.DetectContentType(image_bytes)
-	var file image.Image
 	bmp_bytes := image_bytes
 	if mimetype == "image/png" {
-		file, err = png.Decode(bytes.NewReader(image_bytes))
+		file, err := png.Decode(bytes.NewReader(image_bytes))
 		if err != nil {
 			return fmt.Errorf("Decode PNG file failed, %v", err.Error())
 		}
@@ -959,7 +870,7 @@ func write_image(image_bytes []byte) error {
 		}
 		bmp_bytes = bmp_buf.Bytes()
 	} else if mimetype == "image/jpeg" {
-		file, err = jpeg.Decode(bytes.NewReader(image_bytes))
+		file, err := jpeg.Decode(bytes.NewReader(image_bytes))
 		if err != nil {
 			return fmt.Errorf("Decode JPEG file failed, %v", err.Error())
 		}
@@ -1025,24 +936,26 @@ func write_image(image_bytes []byte) error {
 		return fmt.Errorf("Create DIB file failed, %v", err.Error())
 	}
 	// defer win.DeleteObject(handle)
-	r, _, err = setClipboardData.Call(CF_BITMAP, r1)
+	r, _, err := setClipboardData.Call(CF_BITMAP, r1)
 	if r == 0 {
 		// return fmt.Errorf("设置剪贴板数据失败，错误码: %d", win.GetLastError())
 		return fmt.Errorf("Write image to clipboard failed, %v", err.Error())
 	}
-
 	return nil
 }
 
-func write_files(files []string) error {
+func write_image(image_bytes []byte) error {
 	open_clipboard()
 	defer close_clipboard()
-	ret, _, err := emptyClipboard.Call()
-	if ret == 0 {
+	r, _, err := emptyClipboard.Call()
+	if r == 0 {
 		return fmt.Errorf("failed to clear clipboard: %w", err)
 	}
+	return direct_write_image(image_bytes)
+}
 
-	var fileListSize uint32
+func direct_write_files(files []string) error {
+	var file_list_size uint32
 	for _, path := range files {
 		var count uint32
 		ret, _, err := multiByteToWideChar.Call(
@@ -1057,10 +970,10 @@ func write_files(files []string) error {
 			return fmt.Errorf("MultiByteToWideChar (to get length) for path %s failed: %w", path, err)
 		}
 		count = uint32(ret)
-		fileListSize += count + 1
+		file_list_size += count + 1
 	}
 
-	if fileListSize == 0 {
+	if file_list_size == 0 {
 		return fmt.Errorf("No valid file paths")
 	}
 
@@ -1071,7 +984,7 @@ func write_files(files []string) error {
 		f_nc:    0,
 		f_wide:  1,
 	}
-	memSize := uintptr(unsafe.Sizeof(dropfiles)) + uintptr(fileListSize*2) + 2
+	memSize := uintptr(unsafe.Sizeof(dropfiles)) + uintptr(file_list_size*2) + 2
 
 	// 分配全局内存
 	hMem, _, err := gAlloc.Call(0x0042, memSize)
@@ -1101,7 +1014,7 @@ func write_files(files []string) error {
 			uintptr(unsafe.Pointer(syscall.StringBytePtr(path))),
 			uintptr(int32(len(path))),
 			uintptr(unsafe.Pointer(&dataPtr[0])),
-			uintptr(int32(fileListSize)),
+			uintptr(int32(file_list_size)),
 		)
 		if ret == 0 {
 			return fmt.Errorf("MultiByteToWideChar (to write path) for path %s failed: %w", path, err)
@@ -1114,11 +1027,21 @@ func write_files(files []string) error {
 	// *(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + 2)) = 0
 	*(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + 2)) = uint16(0)
 
-	ret, _, err = setClipboardData.Call(CF_HDROP, hMem)
+	ret, _, err := setClipboardData.Call(CF_HDROP, hMem)
 	if ret == 0 {
 		return fmt.Errorf("SetClipboardData failed: %w", err)
 	}
 	return nil
+}
+
+func write_files(files []string) error {
+	open_clipboard()
+	defer close_clipboard()
+	ret, _, err := emptyClipboard.Call()
+	if ret == 0 {
+		return fmt.Errorf("failed to clear clipboard: %w", err)
+	}
+	return direct_write_files(files)
 }
 
 func get_change_count() uintptr {
