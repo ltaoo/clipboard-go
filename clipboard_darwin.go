@@ -119,12 +119,21 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 	changed := make(chan struct{}, 1)
 	cnt := get_change_count()
 	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()                     // Ensure ticker is stopped to prevent resource leak
+		timeout := time.After(30 * time.Second) // Add 30 second timeout to prevent goroutine leak
+
 		for {
-			// not sure if we are too slow or the user too fast :)
-			time.Sleep(time.Second)
-			cur := get_change_count()
-			if cnt != cur {
-				changed <- struct{}{}
+			select {
+			case <-ticker.C:
+				cur := get_change_count()
+				if cnt != cur {
+					changed <- struct{}{}
+					close(changed)
+					return
+				}
+			case <-timeout:
+				// Timeout reached, close channel and exit to prevent goroutine leak
 				close(changed)
 				return
 			}
@@ -138,6 +147,7 @@ func watch(ctx context.Context) <-chan ClipboardContent {
 	ti := time.NewTicker(time.Second)
 	prev_count := get_change_count()
 	go func() {
+		defer ti.Stop() // Ensure ticker is stopped to prevent resource leak
 		for {
 			select {
 			case <-ctx.Done():

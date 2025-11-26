@@ -401,11 +401,22 @@ func write(t Format, buf []byte) (<-chan struct{}, error) {
 
 		cnt, _, _ := getClipboardSequenceNumber.Call()
 		errch <- nil
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()                     // Ensure ticker is stopped to prevent resource leak
+		timeout := time.After(30 * time.Second) // Add 30 second timeout to prevent goroutine leak
+
 		for {
-			time.Sleep(time.Second)
-			cur, _, _ := getClipboardSequenceNumber.Call()
-			if cur != cnt {
-				changed <- struct{}{}
+			select {
+			case <-ticker.C:
+				cur, _, _ := getClipboardSequenceNumber.Call()
+				if cur != cnt {
+					changed <- struct{}{}
+					close(changed)
+					return
+				}
+			case <-timeout:
+				// Timeout reached, close channel and exit to prevent goroutine leak
 				close(changed)
 				return
 			}
@@ -424,6 +435,8 @@ func watch(ctx context.Context) <-chan ClipboardContent {
 	go func() {
 		// not sure if we are too slow or the user too fast :)
 		ti := time.NewTicker(time.Second)
+		defer ti.Stop()    // Ensure ticker is stopped to prevent resource leak
+		defer close(ready) // Close ready channel following best practices
 		prev_count, _, _ := getClipboardSequenceNumber.Call()
 		ready <- struct{}{}
 		for {
